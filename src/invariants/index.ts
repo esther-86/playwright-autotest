@@ -6,6 +6,8 @@ import { sortingOrderCheck } from './sortingOrder';
 import { paginationDisjointnessCheck } from './paginationDisjointness';
 import { deepLinkIdempotenceCheck } from './deepLinkIdempotence';
 import { perPageLimitCheck } from './perPageLimit';
+import { cartTransitionCheck } from './cartTransition';
+import { boundaryValueCheck } from './boundaryValue';
 
 export * from './types';
 
@@ -17,4 +19,6 @@ export const invariantChecklist: InvariantCheck[] = [
   paginationDisjointnessCheck,
   deepLinkIdempotenceCheck,
   perPageLimitCheck,
+  cartTransitionCheck,
+  boundaryValueCheck,
 ];

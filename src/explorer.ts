@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import { getBrain } from './brain';
 import { extractInteractiveElements } from './observer/treeParser';
+import { getUrlArchetype } from './observer/archetypes';
 import { invariantChecklist, InvariantContext } from './invariants';
 import { logger } from './utils/logger';
 
@@ -24,6 +25,7 @@ async function runExplorer() {
   const brain = getBrain();
 
   const visitedUrls = new Set<string>();
+  const visitedArchetypes = new Set<string>();
   const unvisitedQueue: string[] = [startUrl];
 
   const candidateBugs: Array<{ pageUrl: string; invariant: string; reason: string }> = [];
@@ -33,9 +35,16 @@ async function runExplorer() {
       const currentUrl = unvisitedQueue.shift()!;
       if (visitedUrls.has(currentUrl)) continue;
 
+      const archetype = getUrlArchetype(currentUrl);
+      if (visitedArchetypes.has(archetype)) {
+        logger.info('EQUIVALENCE', `Skipping duplicate template: "${archetype}"`);
+        continue;
+      }
+
       visitedUrls.add(currentUrl);
+      visitedArchetypes.add(archetype);
       const elapsedSec = Math.round((Date.now() - startTime) / 1000);
-      logger.info('NAVIGATE', `Visiting page ${visitedUrls.size} [${elapsedSec}s / ${timeBudgetSeconds}s]: ${currentUrl}`);
+      logger.info('NAVIGATE', `Visiting template "${archetype}" [${elapsedSec}s / ${timeBudgetSeconds}s]: ${currentUrl}`);
 
       await page.goto(currentUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
         logger.error('NAVIGATE', `Failed to load ${currentUrl}`, { error: err.message });
