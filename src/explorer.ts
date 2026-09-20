@@ -8,9 +8,15 @@ import { logger } from './utils/logger';
 async function runExplorer() {
   const startUrl = process.env.TARGET_URL || 'https://academybugs.com/';
   const headless = process.env.HEADLESS !== 'false';
-  const maxPages = 5; // Exploration budget for MVP
+  const timeBudgetSeconds = parseInt(process.env.EXPLORATION_TIME_SECONDS || '60', 10);
+  const timeBudgetMs = timeBudgetSeconds * 1000;
+  const startTime = Date.now();
 
-  logger.info('EXPLORER', `Starting autonomous exploration`, { origin: startUrl, provider: process.env.LLM_PROVIDER, maxBudget: maxPages });
+  logger.info('EXPLORER', `Starting autonomous exploration`, {
+    origin: startUrl,
+    provider: process.env.LLM_PROVIDER,
+    timeBudget: `${timeBudgetSeconds}s`,
+  });
 
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext();
@@ -23,14 +29,14 @@ async function runExplorer() {
   const candidateBugs: Array<{ pageUrl: string; invariant: string; reason: string }> = [];
 
   try {
-    while (unvisitedQueue.length > 0 && visitedUrls.size < maxPages) {
+    while (unvisitedQueue.length > 0 && Date.now() - startTime < timeBudgetMs) {
       const currentUrl = unvisitedQueue.shift()!;
       if (visitedUrls.has(currentUrl)) continue;
 
       visitedUrls.add(currentUrl);
-      logger.info('NAVIGATE', `Visiting page ${visitedUrls.size}/${maxPages}: ${currentUrl}`);
+      const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+      logger.info('NAVIGATE', `Visiting page ${visitedUrls.size} [${elapsedSec}s / ${timeBudgetSeconds}s]: ${currentUrl}`);
 
-      const navStart = Date.now();
       await page.goto(currentUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
         logger.error('NAVIGATE', `Failed to load ${currentUrl}`, { error: err.message });
       });
@@ -51,7 +57,6 @@ async function runExplorer() {
       for (const rawUrl of discoveredHrefs) {
         try {
           const parsed = new URL(rawUrl);
-          // Only same origin, ignore anchors (#) and mailto
           if (
             parsed.hostname === originHost &&
             !parsed.hash &&
@@ -93,7 +98,11 @@ async function runExplorer() {
       }
     }
 
-    logger.info('EXPLORER', `Exploration complete. Visited: ${visitedUrls.size} pages. Bugs: ${candidateBugs.length}`);
+    const totalDurationSec = Math.round((Date.now() - startTime) / 1000);
+    logger.info(
+      'EXPLORER',
+      `Exploration complete in ${totalDurationSec}s (budget: ${timeBudgetSeconds}s). Visited: ${visitedUrls.size} pages. Bugs: ${candidateBugs.length}`
+    );
   } finally {
     await browser.close();
   }
