@@ -1,112 +1,49 @@
-# Playwright Autotest: Metamorphic & Invariant Testing Engine
+# Playwright Autotest
 
-An autonomous, oracle-free web testing framework powered by **Dynamic Seed Harvesting** and **Universal Web Invariants**.
-
-Traditional automated testing breaks because it relies on hardcoded data ($f(x) == y$). This engine tests the **laws of physics of user interfaces** ($f(x) \sim f(x')$):
-* **Zero test data scripts required:** Passively harvests live seeds from network JSON and the DOM.
-* **Works on any website:** E-commerce, SaaS dashboards, internal tools, and media platforms.
-* **Extensible plugin architecture:** Every invariant is an isolated, plug-and-play module.
+> **Autonomous web QA testing using Metamorphic Invariants and Dynamic Seed Harvesting.**  
+> Tests the "laws of physics" of websites (search, filters, sorting, pagination) without needing hardcoded test data or pre-existing database knowledge.
 
 ---
 
-## 🚀 Quick Start
+## ⚡ How to Run
 
-### 1. Installation
+### 1. Set the website you want to test
+Edit `.env` (or leave default):
 ```bash
-git clone <repo-url>
-cd playwright-autotest
-npm install
-npx playwright install chromium
-```
-
-### 2. Configure Target Site
-Set the URL of any website you want to test in `.env`:
-```env
 TARGET_URL=https://academybugs.com/find-bugs/
-HEADLESS=true
 ```
 
-### 3. Run the Tests
+### 2. Run the tests
+From `/Users/huonglai/Desktop/WORKING/playwright-autotest`:
+
 ```bash
-# Run headless
+# Run headless (fast)
 npm test
 
-# Run with visible browser window
+# Run headed (watch the browser live)
 npm run test:headed
 ```
 
 ---
 
-## 📋 The Invariant Checklist
+## 📌 Short Summary: How It Works
 
-All invariants are defined in `src/invariants/` and registered in `src/invariants/index.ts`:
-
-| Invariant | Description | Verification Logic |
-| :--- | :--- | :--- |
-| **`canaryCheck`** | Negative Boundary / Canary | Queries a random UUID; asserts HTTP 200, clean zero-state, no 500 error or blank screen. |
-| **`identityCheck`** | Round-Trip Identity | Searches for a harvested real item; asserts it appears in the results. |
-| **`filterMonotonicityCheck`** | Filter Monotonicity & Reversibility | Applying a filter must narrow count ($C_1 \le C_0$); unchecking must restore count ($C_2 == C_0$). |
-| **`sortingOrderCheck`** | Bidirectional Sorting Monotonicity | Ascending sorts verify $p_i \le p_{i+1}$; Descending sorts verify $p_i \ge p_{i+1}$. |
-| **`paginationDisjointnessCheck`** | Pagination Set Disjointness | Asserts that items displayed on Page 1 never repeat on Page 2 ($\text{Page}_1 \cap \text{Page}_2 = \emptyset$). |
-| **`deepLinkIdempotenceCheck`** | Deep-Link & Refresh Idempotence | Hard reloads the page; asserts state is fully retained and parameters are not dropped. |
-| **`perPageLimitCheck`** | Page Size Upper Bound | Selecting "View 10" asserts that rendered items $\le 10$. |
-
----
-
-## 📁 Project Structure
-
-```text
-playwright-autotest/
-├── ARCHITECTURE.md              # In-depth architectural blueprint & mathematical formulation
-├── README.md                    # Quickstart and usage guide
-├── .env                         # Target URL and runtime options
-├── package.json                 # Scripts and dependencies
-├── tsconfig.json                # TypeScript configuration
-└── src/
-    ├── runner.ts                # Main orchestrator: harvests seeds & executes checklist
-    └── invariants/
-        ├── types.ts             # Standard InvariantCheck interface
-        ├── index.ts             # Invariant checklist registry
-        ├── canary.ts            # Check 1: Negative UUID canary
-        ├── identity.ts          # Check 2: Harvested seed search
-        ├── filterMonotonicity.ts# Check 3: Conjunction and reversibility
-        ├── sortingOrder.ts      # Check 4: Ascending / Descending order
-        ├── paginationDisjointness.ts # Check 5: Disjoint pages
-        ├── deepLinkIdempotence.ts    # Check 6: URL state retention
-        └── perPageLimit.ts      # Check 7: Page size bound
-```
+1. **Passive Observation (Seed Harvesting):** The runner loads the page and sniffs background network JSON and headings to grab real, live item names (seeds) without hardcoding.
+2. **Universal Invariant Checklist:** Executes 7 mathematical checks:
+   - **Canary Check:** Searches a random UUID $\to$ asserts clean zero-state (no 500 error or crash).
+   - **Identity Check:** Searches a harvested item $\to$ asserts it appears on Page 1.
+   - **Filter Monotonicity:** Applying a filter must shrink or preserve counts; unchecking must restore them.
+   - **Sorting Monotonicity:** Ascending sorts must be non-decreasing ($p_i \le p_{i+1}$); Descending must be non-increasing.
+   - **Pagination Disjointness:** Page 1 items must never repeat on Page 2 ($\text{Page}_1 \cap \text{Page}_2 = \emptyset$).
+   - **Deep-Link Idempotence:** Reloading the URL preserves the exact same state without dropping parameters.
+   - **Page Size Bound:** Selecting "View 10" ensures $\le 10$ items are rendered.
+3. **Graceful Degradation:** If a site lacks a feature (e.g. no search bar), that check reports `SKIPPED` rather than failing.
 
 ---
 
-## 🛠️ Adding a New Invariant Check
+## 📁 Key Documentation & Specs
 
-To add a new test, implement the `InvariantCheck` contract in `src/invariants/`:
-
-```typescript
-import { InvariantCheck, InvariantResult } from './types';
-
-export const myCustomCheck: InvariantCheck = {
-  id: 'MY_CUSTOM_CHECK',
-  name: 'My Custom Invariant Check',
-  description: 'Explain the invariant property being verified.',
-  run: async (page, context): Promise<InvariantResult> => {
-    // 1. Locate controls
-    // 2. Perform actions
-    // 3. Assert invariant
-    return { passed: true, status: 'PASS', message: 'Invariant verified.' };
-  },
-};
-```
-
-Then register it in `src/invariants/index.ts`:
-```typescript
-export const invariantChecklist: InvariantCheck[] = [
-  // ...
-  myCustomCheck,
-];
-```
-
----
-
-## 📖 Deep Dive
-For full architectural details, multi-agent explorer/reproducer design, and delta debugging (`ddmin`), read [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+* **[`TODO.md`](./TODO.md)** — Prioritized engineering roadmap and backlog across all 5 milestones.
+* **[`AGENTS.md`](./AGENTS.md)** — Full specification for the dual-agent architecture (Explorer Scout vs. Reproducer Scientist) and delta debugging (`ddmin`).
+* **[`ARCHITECTURE.md`](./ARCHITECTURE.md)** — Theoretical foundations, mathematical invariant proofs, and discovery pipeline.
+* **[`.audit-policy.md`](./.audit-policy.md)** — Operational boundaries and threat model for automated AI auditors (Codex, etc.).

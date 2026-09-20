@@ -6,7 +6,7 @@ export const sortingOrderCheck: InvariantCheck = {
   description: 'Sorting Low-to-High (ASC) or High-to-Low (DESC) must strictly preserve monotonic order.',
   run: async (page): Promise<InvariantResult> => {
     const sortSelect = page.locator(
-      'select[name*="sort" i], select[id*="sort" i], [aria-label*="sort" i]'
+      'select[name*="sort" i], select[id*="sort" i], select.ec_sort_menu, [aria-label*="sort" i]'
     ).first();
 
     if (!(await sortSelect.isVisible({ timeout: 2000 }).catch(() => false))) {
@@ -14,7 +14,7 @@ export const sortingOrderCheck: InvariantCheck = {
     }
 
     const extractNumbers = async (): Promise<number[]> => {
-      const texts = await page.locator('[role="row"], [role="article"], tr, li').allInnerTexts();
+      const texts = await page.locator('.ec_product_li, [role="row"], [role="article"], tr, li').allInnerTexts();
       const nums: number[] = [];
       for (const t of texts) {
         const match = t.match(/\$?(\d+(?:\.\d{1,2})?)/);
@@ -23,48 +23,68 @@ export const sortingOrderCheck: InvariantCheck = {
       return nums;
     };
 
+    let testedDirections = 0;
+
     // 1. Test ASC
     try {
-      await sortSelect.selectOption({ label: /(low to high|asc|cheapest|oldest)/i });
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-      const ascValues = await extractNumbers();
+      const selected = await sortSelect.selectOption({ label: /(low.*high|asc|cheapest|oldest)/i });
+      if (selected.length > 0) {
+        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        const ascValues = await extractNumbers();
 
-      for (let i = 0; i < ascValues.length - 1; i++) {
-        if (ascValues[i] > ascValues[i + 1]) {
-          return {
-            passed: false,
-            status: 'FAIL',
-            message: `Ascending sort failed! Index ${i} (${ascValues[i]}) > Index ${i + 1} (${ascValues[i + 1]}).`,
-          };
+        if (ascValues.length > 1) {
+          testedDirections++;
+          for (let i = 0; i < ascValues.length - 1; i++) {
+            if (ascValues[i] > ascValues[i + 1]) {
+              return {
+                passed: false,
+                status: 'FAIL',
+                message: `Ascending sort failed! Index ${i} ($${ascValues[i]}) > Index ${i + 1} ($${ascValues[i + 1]}).`,
+              };
+            }
+          }
         }
       }
     } catch {
-      // If specific label wasn't found, continue
+      // Option not available
     }
 
     // 2. Test DESC
     try {
-      await sortSelect.selectOption({ label: /(high to low|desc|expensive|newest)/i });
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-      const descValues = await extractNumbers();
+      const selected = await sortSelect.selectOption({ label: /(high.*low|desc|expensive|newest)/i });
+      if (selected.length > 0) {
+        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        const descValues = await extractNumbers();
 
-      for (let i = 0; i < descValues.length - 1; i++) {
-        if (descValues[i] < descValues[i + 1]) {
-          return {
-            passed: false,
-            status: 'FAIL',
-            message: `Descending sort failed! Index ${i} (${descValues[i]}) < Index ${i + 1} (${descValues[i + 1]}).`,
-          };
+        if (descValues.length > 1) {
+          testedDirections++;
+          for (let i = 0; i < descValues.length - 1; i++) {
+            if (descValues[i] < descValues[i + 1]) {
+              return {
+                passed: false,
+                status: 'FAIL',
+                message: `Descending sort failed! Index ${i} ($${descValues[i]}) < Index ${i + 1} ($${descValues[i + 1]}).`,
+              };
+            }
+          }
         }
       }
     } catch {
-      // Continue
+      // Option not available
+    }
+
+    if (testedDirections === 0) {
+      return {
+        passed: true,
+        status: 'SKIPPED',
+        message: 'Sort control found, but no matching ASC/DESC price options could be selected.',
+      };
     }
 
     return {
       passed: true,
       status: 'PASS',
-      message: 'Sorting controls obey monotonic ordering properties.',
+      message: `Sorting controls obey monotonic ordering properties (${testedDirections} directions verified).`,
     };
   },
 };
