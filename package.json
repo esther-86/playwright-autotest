@@ -5,7 +5,9 @@
   "main": "src/runner.ts",
   "scripts": {
     "test": "npx tsx src/runner.ts",
-    "test:headed": "HEADLESS=false npx tsx src/runner.ts"
+    "test:headed": "HEADLESS=false npx tsx src/runner.ts",
+    "explore": "npx tsx src/explorer.ts",
+    "explore:headed": "HEADLESS=false npx tsx src/explorer.ts"
   },
   "keywords": [
     "playwright",
