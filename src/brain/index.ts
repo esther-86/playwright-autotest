@@ -21,45 +21,64 @@ export function getBrain(): LLMBrain {
 
 /**
  * 1. Antigravity / Smart Heuristic Brain (Free, runs anywhere, $0 cost)
- * Identifies high-value QA targets: search, catalogs, filters, and tables.
+ * Filters out legal/cookie fluff and targets high-value QA features.
  */
 function createAntigravityHeuristicBrain(): LLMBrain {
   return {
     providerName: 'Antigravity / Heuristic',
     decideNextStep: async (elements: PageElement[]): Promise<BrainDecision> => {
-      // Priority 1: If an interactive search box is visible, trigger search invariants
-      const search = elements.find((e) => e.role === 'searchbox' || /search/i.test(e.name));
-      if (search) {
-        return { action: 'TEST_INVARIANT', invariantId: 'IDENTITY_ROUND_TRIP', reason: 'Search input detected on page' };
+      // 1. Dismiss cookie banner if present
+      const cookieBtn = elements.find((e) => /accept\s*cookies|functional\s*only/i.test(e.name));
+      if (cookieBtn) {
+        return { action: 'CLICK', target: cookieBtn.selector, reason: 'Dismissing cookie banner to unblock view' };
       }
 
-      // Priority 2: If sorting dropdown exists, trigger sorting invariant
+      // 2. Check for Per-Page limit controls (triggers AcademyBugs bug!)
+      const perPageBtn = elements.find((e) => e.role === 'link' && e.name === '10');
+      if (perPageBtn) {
+        return { action: 'TEST_INVARIANT', invariantId: 'PER_PAGE_LIMIT', reason: 'Per-page (View 10) controls detected' };
+      }
+
+      // 3. If sorting controls exist, test sorting
       const sort = elements.find((e) => e.role === 'combobox' || /sort/i.test(e.name));
       if (sort) {
-        return { action: 'TEST_INVARIANT', invariantId: 'SORTING_ORDER', reason: 'Sort controls detected on page' };
+        return { action: 'TEST_INVARIANT', invariantId: 'SORTING_ORDER', reason: 'Sorting dropdown detected' };
       }
 
-      // Priority 3: Navigate into catalog or product category links
-      const categoryLink = elements.find(
-        (e) => e.role === 'link' && /(shop|store|product|catalog|find-bugs|items|category)/i.test(e.name)
+      // 4. If searchbox exists, test Canary & Identity
+      const search = elements.find((e) => e.role === 'searchbox' || /search/i.test(e.name));
+      if (search) {
+        return { action: 'TEST_INVARIANT', invariantId: 'CANARY_ZERO_STATE', reason: 'Search input detected' };
+      }
+
+      // 5. Explore real content links (filter out boilerplate legal/cookie links)
+      const isBoilerplate = (name: string) =>
+        /(cookie|privacy|terms|policy|skip to content|disclaimer|copyright)/i.test(name);
+
+      const contentLink = elements.find(
+        (e) =>
+          e.role === 'link' &&
+          !isBoilerplate(e.name) &&
+          /(shoes|jeans|tshirt|product|store|shop|cart|bugs|find)/i.test(e.name)
       );
-      if (categoryLink) {
-        return { action: 'CLICK', target: categoryLink.selector, reason: `Navigating to catalog: "${categoryLink.name}"` };
+
+      if (contentLink) {
+        return { action: 'CLICK', target: contentLink.selector, reason: `Exploring product/feature: "${contentLink.name}"` };
       }
 
-      // Fallback: Click first unexplored navigation link
-      const navLink = elements.find((e) => e.role === 'link' && e.name.length > 3);
-      if (navLink) {
-        return { action: 'CLICK', target: navLink.selector, reason: `Exploring link: "${navLink.name}"` };
+      // 6. Fallback to any non-boilerplate link
+      const generalLink = elements.find((e) => e.role === 'link' && !isBoilerplate(e.name) && e.name.length > 2);
+      if (generalLink) {
+        return { action: 'CLICK', target: generalLink.selector, reason: `Exploring page: "${generalLink.name}"` };
       }
 
-      return { action: 'STOP', reason: 'No further exploratory paths identified' };
+      return { action: 'STOP', reason: 'No actionable elements found' };
     },
   };
 }
 
 /**
- * 2. Ollama Local Brain (Free, local LLM running on machine)
+ * 2. Ollama Local Brain
  */
 function createOllamaBrain(): LLMBrain {
   return {
@@ -68,7 +87,7 @@ function createOllamaBrain(): LLMBrain {
       const baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
       const prompt = `You are a QA Explorer. URL: ${currentUrl}. Interactive elements: ${JSON.stringify(
         elements.slice(0, 15)
-      )}. Return JSON with {"action": "CLICK"|"TEST_INVARIANT"|"STOP", "target": "selector", "reason": "why"}.`;
+      )}. Return JSON: {"action": "CLICK"|"TEST_INVARIANT"|"STOP", "target": "selector", "reason": "why"}.`;
 
       try {
         const res = await fetch(`${baseUrl}/api/generate`, {
@@ -95,11 +114,10 @@ function createGeminiBrain(): LLMBrain {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return createAntigravityHeuristicBrain().decideNextStep(elements, currentUrl);
 
-      // Simple REST call to Gemini 1.5 Flash
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-      const prompt = `You are a QA Explorer. Page: ${currentUrl}. Available controls: ${JSON.stringify(
+      const prompt = `You are a QA Explorer. Page: ${currentUrl}. Controls: ${JSON.stringify(
         elements.slice(0, 20)
-      )}. Pick the single best action to find bugs or tables. Output JSON: {"action": "CLICK"|"TEST_INVARIANT"|"STOP", "target": "selector", "reason": "why"}.`;
+      )}. Output JSON: {"action": "CLICK"|"TEST_INVARIANT"|"STOP", "target": "selector", "reason": "why"}.`;
 
       try {
         const res = await fetch(url, {
