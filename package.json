@@ -1,0 +1,27 @@
+{
+  "name": "playwright-autotest",
+  "version": "1.0.0",
+  "description": "Metamorphic & Invariant Web Testing powered by Dynamic Seed Harvesting",
+  "main": "src/runner.ts",
+  "scripts": {
+    "test": "npx tsx src/runner.ts",
+    "test:headed": "HEADLESS=false npx tsx src/runner.ts"
+  },
+  "keywords": [
+    "playwright",
+    "metamorphic-testing",
+    "invariant-testing",
+    "qa-automation",
+    "ai-testing"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.14",
+    "typescript": "^5.0.0"
+  }
+}
