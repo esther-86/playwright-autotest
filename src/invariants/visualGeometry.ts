@@ -1,177 +1,158 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal Visual Layout Geometry & Alignment Invariant:
+ * Elements on screen must obey fundamental CSS layout geometry:
+ * 1. Non-Collision: Sidebar and action items must not penetrate into the footer boundary.
+ * 2. Form Grid Alignment: Sequential field labels in a vertical column must share collinear left X-coordinates.
+ * 3. Button Centering: Button caption text must not possess severe asymmetric indentation or offsets.
+ * 4. Image Asset Integrity: Displayed image tags must render non-zero natural dimensions.
+ */
 export const visualGeometryCheck: InvariantCheck = {
   id: 'VISUAL_LAYOUT_GEOMETRY',
-  name: 'Visual Layout Geometry & Collision Invariant',
-  description: 'Asserts bounding box non-collision, form grid alignment, caption centering, and image fill ratios.',
-  applicableArchetypes: ['/find-bugs/', '/store/:slug', '/account/', '/articles/'],
+  name: 'Visual Layout Geometry & Spatial Non-Collision Invariant',
+  description: 'Asserts bounding box non-collision, form label collinearity, and valid image asset dimensions.',
   run: async (page): Promise<InvariantResult | InvariantResult[]> => {
     const results: InvariantResult[] = [];
 
-    // 1. Invariant: Sidebar Button Non-Collision with Footer (Triggers BUG-009)
-    const sidebarSignIn = page.locator('#login-from-side-menu input[type="submit"], .signin-gui-bug').first();
-    const footer = page.locator('#sq-footer, footer, .sq-footer').first();
+    // 1. Invariant: Action / Sidebar Container Non-Collision with Footer
+    const footer = page.locator('footer, [role="contentinfo"], [class*="footer" i]').first();
+    const actionButtons = await page.locator('aside button, aside input[type="submit"], [class*="sidebar" i] input[type="submit"]').all();
 
-    if (await sidebarSignIn.isVisible().catch(() => false) && await footer.isVisible().catch(() => false)) {
-      const btnBox = await sidebarSignIn.boundingBox();
+    if (await footer.isVisible().catch(() => false) && actionButtons.length > 0) {
       const footerBox = await footer.boundingBox();
-
-      if (btnBox && footerBox) {
-        const bottomEdge = btnBox.y + btnBox.height;
-        if (bottomEdge > footerBox.y) {
-          results.push({
-            passed: false,
-            status: 'FAIL',
-            message: `Element collision detected! Sidebar button (bottom ${bottomEdge.toFixed(0)}px) overlaps footer (top ${footerBox.y.toFixed(0)}px).`,
-            details: {
-              title: 'Sidebar Sign In Button Overlaps Footer Container',
-              expected: 'Sidebar elements must terminate above footer top boundary.',
-              actual: `Button overlaps footer by ${(bottomEdge - footerBox.y).toFixed(0)}px.`,
-              severity: 'LOW',
-              reproductionSteps: [
-                `Navigate to ${page.url()}`,
-                'Scroll to bottom of right sidebar',
-                'Inspect overlap between Sign In button and footer container'
-              ],
-              specSnippet: `const btn = page.locator('#login-from-side-menu input[type="submit"]').first();
-const footer = page.locator('#sq-footer').first();
+      for (const btn of actionButtons) {
+        if (await btn.isVisible().catch(() => false)) {
+          const btnBox = await btn.boundingBox();
+          if (btnBox && footerBox) {
+            const bottomEdge = btnBox.y + btnBox.height;
+            if (bottomEdge > footerBox.y + 2) {
+              const btnDesc = (await btn.getAttribute('value')) || (await btn.innerText().catch(() => 'button'));
+              results.push({
+                passed: false,
+                status: 'FAIL',
+                message: `Element collision detected! Action button "${btnDesc}" (bottom ${bottomEdge.toFixed(0)}px) penetrates footer top (${footerBox.y.toFixed(0)}px)!`,
+                details: {
+                  title: `Interactive Action Control "${btnDesc}" Overlaps Footer Container`,
+                  expected: 'Sidebar and page content elements must terminate strictly above footer top boundary.',
+                  actual: `Element overlaps into footer container by ${(bottomEdge - footerBox.y).toFixed(0)}px.`,
+                  severity: 'LOW',
+                  reproductionSteps: [
+                    `Navigate to ${page.url()}`,
+                    'Scroll down to the footer boundary',
+                    `Inspect spatial position of button "${btnDesc}" relative to footer`
+                  ],
+                  specSnippet: `const btn = page.locator('aside input[type="submit"], [class*="sidebar" i] input[type="submit"]').first();
+const footer = page.locator('footer, [role="contentinfo"]').first();
 const bBox = await btn.boundingBox();
 const fBox = await footer.boundingBox();
 expect(bBox!.y + bBox!.height).toBeLessThanOrEqual(fBox!.y);`
-            },
-          });
-        }
-      }
-    }
-
-    // 2. Invariant: Form Field Label Coordinate Alignment (Triggers BUG-010)
-    const emailLabel = page.locator('label[for*="email" i], .ec_account_login_line label').first();
-    const passwordLabel = page.locator('label[for*="password" i]').first();
-
-    if (await emailLabel.isVisible().catch(() => false) && await passwordLabel.isVisible().catch(() => false)) {
-      const eBox = await emailLabel.boundingBox();
-      const pBox = await passwordLabel.boundingBox();
-
-      if (eBox && pBox) {
-        const xDiff = Math.abs(eBox.x - pBox.x);
-        if (xDiff > 5) {
-          results.push({
-            passed: false,
-            status: 'FAIL',
-            message: `Form grid misalignment detected! Email label X=${eBox.x.toFixed(0)}px vs Password label X=${pBox.x.toFixed(0)}px (offset ${xDiff.toFixed(0)}px).`,
-            details: {
-              title: 'Password Field Label Misaligned in Login Form',
-              expected: 'Sequential form labels in a single column must share identical X-coordinates.',
-              actual: `Password label is indented by ${xDiff.toFixed(0)}px relative to Email label.`,
-              severity: 'LOW',
-              reproductionSteps: [
-                'Navigate to https://academybugs.com/account/?ec_page=login',
-                'Examine the Email and Password labels',
-                'Observe horizontal indentation misalignment'
-              ],
-              specSnippet: `const eBox = await page.locator('label[for*="email" i]').first().boundingBox();
-const pBox = await page.locator('label[for*="password" i]').first().boundingBox();
-expect(Math.abs(eBox!.x - pBox!.x)).toBeLessThanOrEqual(3);`
-            },
-          });
-        }
-      }
-    }
-
-    // 3. Invariant: Button Caption Centering & Text Misalignment (Triggers BUG-007)
-    const loginSubmitBtn = page.locator('.ec_account_login_line input[type="submit"], #ec_account_login_form input[type="submit"]').first();
-    if (await loginSubmitBtn.isVisible().catch(() => false)) {
-      const textIndent = await loginSubmitBtn.evaluate((el: HTMLElement) => {
-        const style = window.getComputedStyle(el);
-        return parseFloat(style.textIndent) || parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      }).catch(() => 0);
-
-      if (Math.abs(textIndent) > 15) {
-        results.push({
-          passed: false,
-          status: 'FAIL',
-          message: `Button caption alignment failure: Sign In button text is horizontally displaced (offset: ${textIndent}px)!`,
-          details: {
-            title: "Sign In Button Caption Text Misaligned / Off-Center",
-            expected: 'Action button text should be horizontally centered within button boundary.',
-            actual: `Button text contains an asymmetrical offset/indent of ${textIndent}px.`,
-            severity: 'LOW',
-            reproductionSteps: [
-              'Navigate to https://academybugs.com/account/?ec_page=login',
-              'Inspect the Sign In button inside the login card',
-              'Observe label text is visibly offset from center'
-            ],
-            specSnippet: `const btn = page.locator('.ec_account_login_line input[type="submit"]').first();
-const offset = await btn.evaluate(el => Math.abs(parseFloat(getComputedStyle(el).textIndent)));
-expect(offset).toBeLessThan(10);`
-          },
-        });
-      }
-    }
-
-    // 4. Invariant: Image Container Fill Ratio (Triggers BUG-006)
-    if (page.url().includes('dark-grey-jeans')) {
-      const jeansImg = page.locator('.ec_details_left img, .ec_image_container img').first();
-      if (await jeansImg.isVisible().catch(() => false)) {
-        const parent = jeansImg.locator('..');
-        const imgBox = await jeansImg.boundingBox();
-        const parentBox = await parent.boundingBox();
-
-        if (imgBox && parentBox) {
-          const rightGap = parentBox.x + parentBox.width - (imgBox.x + imgBox.width);
-          if (rightGap > 40) {
-            results.push({
-              passed: false,
-              status: 'FAIL',
-              message: `Image aspect ratio defect: Image does not fill container, leaving ${rightGap.toFixed(0)}px blank margin on right!`,
-              details: {
-                title: 'Product Image Has Aspect-Ratio Cropping / Blank Margin',
-                expected: 'Product gallery images must fill container without asymmetrical letterbox margin.',
-                actual: `Image has ${rightGap.toFixed(0)}px unrendered whitespace on right margin.`,
-                severity: 'MEDIUM',
-                reproductionSteps: [
-                  'Navigate to https://academybugs.com/store/dark-grey-jeans/',
-                  'Inspect the main product image container',
-                  'Observe severe blank block on right margin'
-                ],
-                specSnippet: `const img = page.locator('.ec_details_left img').first();
-const box = await img.boundingBox();
-expect(box!.width).toBeGreaterThan(250);`
-              },
-            });
+                },
+              });
+              break;
+            }
           }
         }
       }
     }
 
-    // 5. Invariant: Broken Image Detection (Visual Example on Articles)
-    if (page.url().includes('articles')) {
-      const brokenImgs = await page.locator('img').evaluateAll((imgs: HTMLImageElement[]) => {
-        return imgs.filter((img) => img.complete && img.naturalWidth === 0 && (img.width > 20 || img.height > 20)).map((img) => img.src);
-      });
+    // 2. Invariant: Form Field Label Coordinate Collinearity
+    const verticalFormLabels = await page.locator('form label:visible').all();
+    if (verticalFormLabels.length >= 2) {
+      const firstBox = await verticalFormLabels[0].boundingBox();
+      const secondBox = await verticalFormLabels[1].boundingBox();
 
-      if (brokenImgs.length > 0) {
+      if (firstBox && secondBox && Math.abs(firstBox.y - secondBox.y) > 20) {
+        // Labels are in separate rows of the same column
+        const xDiff = Math.abs(firstBox.x - secondBox.x);
+        if (xDiff > 5) {
+          const l1 = (await verticalFormLabels[0].innerText().catch(() => 'Field 1')).trim();
+          const l2 = (await verticalFormLabels[1].innerText().catch(() => 'Field 2')).trim();
+
+          results.push({
+            passed: false,
+            status: 'FAIL',
+            message: `Form grid misalignment detected! Label "${l1}" (X=${firstBox.x.toFixed(0)}px) vs Label "${l2}" (X=${secondBox.x.toFixed(0)}px) offset by ${xDiff.toFixed(0)}px!`,
+            details: {
+              title: `Form Field Labels "${l1}" and "${l2}" Visually Misaligned`,
+              expected: 'Sequential column form labels must share collinear left margin alignment.',
+              actual: `Labels have horizontal displacement offset of ${xDiff.toFixed(0)}px.`,
+              severity: 'LOW',
+              reproductionSteps: [
+                `Navigate to ${page.url()}`,
+                `Examine the horizontal alignment of labels "${l1}" and "${l2}"`,
+                'Observe uneven left-side indentation'
+              ],
+              specSnippet: `const labels = page.locator('form label:visible');
+const b1 = await labels.nth(0).boundingBox();
+const b2 = await labels.nth(1).boundingBox();
+expect(Math.abs(b1!.x - b2!.x)).toBeLessThanOrEqual(3);`
+            },
+          });
+        }
+      }
+    }
+
+    // 3. Invariant: Action Button Caption Centering & Text Misalignment
+    const allButtons = await page.locator('input[type="submit"]:visible, button:visible').all();
+    for (const btn of allButtons.slice(0, 5)) {
+      const textIndent = await btn.evaluate((el: HTMLElement) => {
+        const style = window.getComputedStyle(el);
+        return parseFloat(style.textIndent) || 0;
+      }).catch(() => 0);
+
+      if (Math.abs(textIndent) > 15) {
+        const btnVal = (await btn.getAttribute('value')) || (await btn.innerText().catch(() => 'Button'));
         results.push({
           passed: false,
           status: 'FAIL',
-          message: `Broken image detected: ${brokenImgs[0]} failed to render (naturalWidth = 0)!`,
+          message: `Button caption alignment failure: "${btnVal}" has severe asymmetric text-indent (${textIndent}px)!`,
           details: {
-            title: `Broken Image in Article Feed (${brokenImgs[0]})`,
-            expected: 'All article teaser images must render valid bitmap graphics.',
-            actual: `Image source ${brokenImgs[0]} is broken/missing.`,
+            title: `Button "${btnVal}" Caption Text Asymmetrically Offset`,
+            expected: 'Button labels should be centered without arbitrary text-indentation.',
+            actual: `Button text contains an asymmetrical displacement of ${textIndent}px.`,
             severity: 'LOW',
             reproductionSteps: [
-              'Open https://academybugs.com/articles/',
-              'Scroll to bottom of the article list',
-              'Observe broken image icon on the last article'
+              `Navigate to ${page.url()}`,
+              `Inspect the layout and text centering of "${btnVal}"`,
+              'Observe label text is off-center'
             ],
-            specSnippet: `await page.goto('https://academybugs.com/articles/');
-const lastImg = page.locator('article img, .post img').last();
-const natWidth = await lastImg.evaluate((img: HTMLImageElement) => img.naturalWidth);
-expect(natWidth).toBeGreaterThan(0);`
+            specSnippet: `const btn = page.locator(':has-text("${btnVal.replace(/"/g, '')}")').first();
+const offset = await btn.evaluate(el => Math.abs(parseFloat(getComputedStyle(el).textIndent)));
+expect(offset).toBeLessThan(10);`
           },
         });
+        break;
       }
+    }
+
+    // 4. Invariant: Broken Image Detection (Natural Dimensions > 0)
+    const brokenImages = await page.locator('img:visible').evaluateAll((imgs: HTMLImageElement[]) => {
+      return imgs
+        .filter((img) => img.complete && img.naturalWidth === 0 && (img.width > 20 || img.height > 20))
+        .map((img) => img.src);
+    }).catch(() => [] as string[]);
+
+    if (brokenImages.length > 0) {
+      results.push({
+        passed: false,
+        status: 'FAIL',
+        message: `Broken image detected: Resource "${brokenImages[0]}" failed to decode (naturalWidth = 0)!`,
+        details: {
+          title: `Broken Image Asset Failed to Render (${brokenImages[0].slice(0, 40)})`,
+          expected: 'Image tags must load valid graphic bitmaps.',
+          actual: `Image source is missing or corrupt (naturalWidth: 0).`,
+          severity: 'LOW',
+          reproductionSteps: [
+            `Open ${page.url()}`,
+            'Inspect rendered images on the page',
+            `Observe image ${brokenImages[0]} displays broken image graphic`
+          ],
+          specSnippet: `const img = page.locator('img[src*="${brokenImages[0].slice(-20)}"]').first();
+const natWidth = await img.evaluate((el: HTMLImageElement) => el.naturalWidth);
+expect(natWidth).toBeGreaterThan(0);`
+        },
+      });
     }
 
     if (results.length > 0) {
@@ -181,7 +162,7 @@ expect(natWidth).toBeGreaterThan(0);`
     return {
       passed: true,
       status: 'PASS',
-      message: 'Visual geometry invariants (alignment, containment, image fill) satisfied.',
+      message: 'Visual layout geometry, non-collision, alignment, and asset dimensions verified cleanly.',
     };
   },
 };

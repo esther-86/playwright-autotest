@@ -1,78 +1,85 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal Financial / Cart Arithmetic Invariant:
+ * On any checkout, cart, or transactional summary, the Grand Total must strictly equal
+ * the sum of item line totals plus itemized fees (shipping, tax) minus discounts.
+ */
 export const cartArithmeticCheck: InvariantCheck = {
   id: 'CART_MATH_ARITHMETIC',
-  name: 'Cart Subtotal & Grand Total Arithmetic Invariant',
-  description: 'Grand Total must strictly equal Subtotal + Shipping + Tax without unexplained surcharges.',
-  applicableArchetypes: ['/my-cart/'],
+  name: 'Cart & Invoice Financial Arithmetic Invariant',
+  description: 'Grand Total must strictly equal Subtotal + Shipping + Tax without undocumented surcharges.',
+  applicableArchetypes: ['/cart', '/checkout', '/basket', '/order'],
   run: async (page): Promise<InvariantResult> => {
-    const isCartPage = page.url().includes('/my-cart');
-    if (!isCartPage) {
-      return { passed: true, status: 'SKIPPED', message: 'Not on cart page.' };
+    // Locate subtotal and grand total using generic semantic queries
+    const subtotalEl = page.locator(
+      '[class*="subtotal" i], [id*="subtotal" i], tr:has-text("Subtotal") td, td:has-text("Subtotal") + td'
+    ).last();
+    const grandTotalEl = page.locator(
+      '[class*="grand_total" i], [class*="grandtotal" i], [class*="order-total" i], tr:has-text("Total") td:not(:has-text("Subtotal")), td:has-text("Total") + td, [class*="total" i] strong'
+    ).last();
+
+    if (!(await subtotalEl.isVisible({ timeout: 1500 }).catch(() => false)) ||
+        !(await grandTotalEl.isVisible({ timeout: 1500 }).catch(() => false))) {
+      return { passed: true, status: 'SKIPPED', message: 'No financial pricing summary detected on this page.' };
     }
 
-    let subtotalEl = page.locator('.ec_cart_subtotal, [class*="subtotal"]').first();
-    let grandTotalEl = page.locator('.ec_cart_grand_total, [class*="grand_total"]').first();
+    const subtotalText = await subtotalEl.innerText().catch(() => '');
+    const grandTotalText = await grandTotalEl.innerText().catch(() => '');
 
-    // Auto-prime if cart is empty
-    if (!(await subtotalEl.isVisible({ timeout: 1500 }).catch(() => false))) {
-      await page.goto('https://academybugs.com/store/dark-grey-jeans/').catch(() => {});
-      const addBtn = page.locator('input[value*="Add to Cart" i], button:has-text("Add to Cart"), a:has-text("Add to Cart"), .ec_details_add_to_cart a').first();
-      if (await addBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await addBtn.click().catch(() => {});
-        await page.waitForTimeout(1000);
-      }
-      await page.goto('https://academybugs.com/my-cart/').catch(() => {});
-      await page.waitForTimeout(1500);
-      subtotalEl = page.locator('.ec_cart_subtotal, [class*="subtotal"]').first();
-      grandTotalEl = page.locator('.ec_cart_grand_total, [class*="grand_total"]').first();
-    }
+    const parseAmount = (text: string) => {
+      const match = text.match(/[$€£¥]?\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)/);
+      return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+    };
 
-    if (!(await subtotalEl.isVisible({ timeout: 2000 }).catch(() => false)) ||
-        !(await grandTotalEl.isVisible({ timeout: 2000 }).catch(() => false))) {
-      return { passed: true, status: 'SKIPPED', message: 'Cart pricing elements not found (cart may be empty).' };
-    }
-
-    const subtotalText = await subtotalEl.innerText();
-    const grandTotalText = await grandTotalEl.innerText();
-
-    const subtotal = parseFloat(subtotalText.replace(/[^0-9.]/g, ''));
-    const grandTotal = parseFloat(grandTotalText.replace(/[^0-9.]/g, ''));
+    const subtotal = parseAmount(subtotalText);
+    const grandTotal = parseAmount(grandTotalText);
 
     if (isNaN(subtotal) || isNaN(grandTotal)) {
-      return { passed: true, status: 'SKIPPED', message: 'Could not parse currency amounts.' };
+      return { passed: true, status: 'SKIPPED', message: 'Could not parse currency figures from summary table.' };
     }
 
-    // Mathematical Invariant: Grand total must match subtotal + verified fees
+    // Mathematical Invariant: Total == Subtotal + itemized additions
     const difference = Math.round((grandTotal - subtotal) * 100) / 100;
 
-    if (difference === 100) {
-      return {
-        passed: false,
-        status: 'FAIL',
-        message: `Cart Grand Total is inflated by exactly $100.00! (Subtotal: $${subtotal.toFixed(2)}, Grand Total: $${grandTotal.toFixed(2)})`,
-        details: {
-          title: 'Cart Grand Total Inflated by Arbitrary $100 Surcharge',
-          expected: `Grand Total ($${grandTotal.toFixed(2)}) must equal Subtotal ($${subtotal.toFixed(2)}) + legitimate shipping/taxes.`,
-          actual: `Grand Total ($${grandTotal.toFixed(2)}) includes an undocumented $100 surcharge.`,
-          severity: 'CRITICAL',
-          reproductionSteps: [
-            'Navigate to catalog and add an item to the cart',
-            'Open https://academybugs.com/my-cart/',
-            'Observe Subtotal and Grand Total prices',
-            'Verify Grand Total is inflated by exactly $100.00'
-          ],
-          specSnippet: `const subtotal = parseFloat((await page.locator('.ec_cart_subtotal').innerText()).replace(/[^0-9.]/g, ''));
-const grandTotal = parseFloat((await page.locator('.ec_cart_grand_total').innerText()).replace(/[^0-9.]/g, ''));
-expect(grandTotal - subtotal).not.toBe(100.0);`
-        },
-      };
+    // Detect unexplained inflation / arbitrary surcharge (e.g. exactly 100.00 unexplained difference)
+    if (difference > 0) {
+      // Check if shipping or tax explains this difference
+      const feeTexts = await page.locator('[class*="tax" i], [class*="shipping" i], [class*="fee" i]').allInnerTexts().catch(() => []);
+      let totalFees = 0;
+      for (const ft of feeTexts) {
+        const amt = parseAmount(ft);
+        if (!isNaN(amt)) totalFees += amt;
+      }
+
+      const unexplained = Math.round((difference - totalFees) * 100) / 100;
+      if (unexplained !== 0) {
+        return {
+          passed: false,
+          status: 'FAIL',
+          message: `Financial arithmetic violation: Grand Total ($${grandTotal.toFixed(2)}) exceeds Subtotal ($${subtotal.toFixed(2)}) by $${difference.toFixed(2)} with $${unexplained.toFixed(2)} unexplained surcharge!`,
+          details: {
+            title: 'Cart Grand Total Inflated by Arbitrary Undocumented Surcharge',
+            expected: `Grand Total ($${grandTotal.toFixed(2)}) must equal Subtotal ($${subtotal.toFixed(2)}) plus documented fees ($${totalFees.toFixed(2)}).`,
+            actual: `An unexplained surcharge of $${unexplained.toFixed(2)} is added to the Grand Total.`,
+            severity: 'CRITICAL',
+            reproductionSteps: [
+              `Navigate to ${page.url()}`,
+              'Inspect Subtotal and Grand Total in the pricing summary',
+              `Observe Grand Total contains an unexplained $${unexplained.toFixed(2)} inflation`
+            ],
+            specSnippet: `const subtotal = parseFloat((await page.locator('[class*="subtotal" i]').last().innerText()).replace(/[^0-9.]/g, ''));
+const grandTotal = parseFloat((await page.locator('[class*="total" i]').last().innerText()).replace(/[^0-9.]/g, ''));
+expect(grandTotal - subtotal).not.toBe(${difference});`
+          },
+        };
+      }
     }
 
     return {
       passed: true,
       status: 'PASS',
-      message: `Cart arithmetic verified: Subtotal $${subtotal.toFixed(2)} -> Total $${grandTotal.toFixed(2)}.`,
+      message: `Financial arithmetic verified: Subtotal $${subtotal.toFixed(2)} -> Total $${grandTotal.toFixed(2)}.`,
     };
   },
 };

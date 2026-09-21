@@ -2,7 +2,9 @@ import { Page } from 'playwright';
 
 export interface InvariantContext {
   targetUrl: string;
-  seeds: string[];
+  seeds?: string[];
+  targetSelector?: string;
+  params?: Record<string, any>;
 }
 
 export interface InvariantResultDetails {

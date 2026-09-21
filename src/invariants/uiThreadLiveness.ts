@@ -1,197 +1,161 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal UI Thread Liveness & Crash Overlay Guard:
+ * Interacting with interactive controls (selects, forms, buttons, variant toggles)
+ * must never lock the browser event loop, trigger fatal uncaught errors,
+ * or inject full-screen crash/freeze blocker overlays.
+ */
 export const uiThreadLivenessCheck: InvariantCheck = {
-  id: 'UI_THREAD_RESPONSIVENESS',
-  name: 'UI Thread Liveness & Crash Overlay Guard',
-  description: 'Interactive controls must not freeze the main JavaScript thread or inject error crash overlays.',
-  applicableArchetypes: ['/store/:slug', '/find-bugs/', '/account/', '/what-we-offer'],
-  run: async (page): Promise<InvariantResult | InvariantResult[]> => {
+  id: 'UI_THREAD_LIVENESS',
+  name: 'UI Thread Responsiveness & Crash Guard',
+  description: 'Controls must execute without unhandled exceptions, event loop freezing, or crash overlays.',
+  run: async (page, context): Promise<InvariantResult | InvariantResult[]> => {
     const results: InvariantResult[] = [];
     const currentUrl = page.url();
 
-    const isCrashOverlayVisible = async (): Promise<boolean> => {
-      const overlay = page.locator('.academy-crash-overlay-bug, [class*="crash-overlay"]');
-      return await overlay.isVisible({ timeout: 1000 }).catch(() => false);
+    const isCrashOrFreezeOverlayActive = async (): Promise<string | null> => {
+      // Generic query for blocker overlays or crash banners
+      const overlay = page.locator(
+        '[class*="crash" i], [class*="freeze" i], [id*="crash" i], [class*="overlay"][class*="bug" i]'
+      ).first();
+
+      if (await overlay.isVisible({ timeout: 800 }).catch(() => false)) {
+        const text = await overlay.innerText().catch(() => 'Crash Overlay Displayed');
+        return text.trim() || 'Interactive crash overlay detected';
+      }
+      return null;
     };
 
-    const recoverPage = async () => {
+    const recoverView = async () => {
       await page.goto(currentUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
       await page.waitForTimeout(500);
     };
 
-    // 1. Test Currency Conversion Dropdown (Triggers BUG-021)
-    const currencySelect = page.locator('select.ec_currency_conversion, select[name*="currency" i]').first();
-    if (await currencySelect.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await currencySelect.selectOption({ index: 1 }).catch(() => {});
-      await page.waitForTimeout(1000);
+    // 1. Probe comboboxes / select dropdowns on the page
+    const selectElements = await page.locator('select:visible').all();
+    for (const sel of selectElements.slice(0, 3)) {
+      const optionCount = await sel.locator('option').count().catch(() => 0);
+      if (optionCount > 1) {
+        await sel.selectOption({ index: 1 }).catch(() => {});
+        await page.waitForTimeout(1000);
 
-      if (await isCrashOverlayVisible()) {
-        results.push({
-          passed: false,
-          status: 'FAIL',
-          message: 'Changing currency dropdown triggered a full-screen crash freeze overlay!',
-          details: {
-            title: 'Currency Conversion Switcher Locks UI Thread (Crash / Freeze)',
-            expected: 'Selecting a currency updates price display without blocking UI thread.',
-            actual: 'Page freezes and triggers a crash overlay upon selecting an alternate currency.',
-            severity: 'HIGH',
-            reproductionSteps: [
-              `Navigate to ${page.url()}`,
-              'Locate Currency Conversion dropdown in sidebar',
-              'Select an alternate currency (e.g. EUR, GBP)',
-              'Observe crash overlay injected and page frozen'
-            ],
-            consoleErrors: ['Uncaught UI Freeze: Crash overlay triggered on currency conversion'],
-            specSnippet: `const currencySelect = page.locator('select.ec_currency_conversion').first();
-await currencySelect.selectOption({ index: 1 });
-await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
-          },
-        });
-        await recoverPage();
-      }
-    }
-
-    // 2. Test Comment Form Submission (Triggers BUG-023)
-    const commentBox = page.locator('#comment, textarea[name="comment"]').first();
-    const commentSubmit = page.locator('#submit, input[name="submit"][value*="Comment" i]').first();
-    if (await commentBox.isVisible({ timeout: 1500 }).catch(() => false) &&
-        await commentSubmit.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await commentBox.fill('Automated QA Invariant Test Comment').catch(() => {});
-      await page.locator('#author').fill('QA Tester').catch(() => {});
-      await page.locator('#email').fill('qa@test.com').catch(() => {});
-      await commentSubmit.click().catch(() => {});
-      await page.waitForTimeout(1500);
-
-      if (await isCrashOverlayVisible()) {
-        results.push({
-          passed: false,
-          status: 'FAIL',
-          message: 'Submitting a comment froze the page with crash overlay!',
-          details: {
-            title: "'Post Comment' Submission Freezes UI with Crash Overlay",
-            expected: 'Submitting a comment posts message without freezing browser UI.',
-            actual: 'Submitting comment triggers crash overlay and locks user input.',
-            severity: 'HIGH',
-            reproductionSteps: [
-              `Navigate to ${page.url()}`,
-              'Fill out the Leave a Reply comment form',
-              'Click Post Comment',
-              'Observe page locks up with full-screen crash overlay'
-            ],
-            consoleErrors: ['Crash bug: UI thread locked on comment submission'],
-            specSnippet: `await page.locator('#comment').fill('QA Comment');
-await page.locator('#author').fill('QA');
-await page.locator('#email').fill('qa@test.com');
-await page.locator('#submit').click();
-await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
-          },
-        });
-        await recoverPage();
-      }
-    }
-
-    // 3. Test Password Retrieval (Triggers BUG-024)
-    const forgotEmail = page.locator('input[type="email"], input[name*="email" i]').first();
-    const retrieveBtn = page.locator('input[value*="Retrieve" i], button:has-text("Retrieve")').first();
-    if (page.url().includes('forgot_password') || (await retrieveBtn.isVisible({ timeout: 1000 }).catch(() => false))) {
-      if (await forgotEmail.isVisible() && await retrieveBtn.isVisible()) {
-        await forgotEmail.fill('user@example.com').catch(() => {});
-        await retrieveBtn.click().catch(() => {});
-        await page.waitForTimeout(1500);
-
-        if (await isCrashOverlayVisible()) {
+        const crashMsg = await isCrashOrFreezeOverlayActive();
+        if (crashMsg) {
           results.push({
             passed: false,
             status: 'FAIL',
-            message: 'Clicking Retrieve Password locked the interface with crash overlay!',
+            message: `UI Liveness failure: Changing selection triggered an unhandled crash overlay: "${crashMsg}"!`,
             details: {
-              title: "'Retrieve Password' Submission Locks Application in Crash State",
-              expected: 'Entering email and clicking Retrieve Password shows dispatch confirmation.',
-              actual: 'Clicking button locks UI with crash overlay; no reset email triggered.',
-              severity: 'HIGH',
-              reproductionSteps: [
-                'Navigate to forgot password form',
-                'Enter email into password retrieval field',
-                'Click Retrieve Password button',
-                'Observe application enters unresponsive crash state'
-              ],
-              consoleErrors: ['UI Freeze: Password retrieval handler locks interface'],
-              specSnippet: `await page.locator('input[type="email"]').fill('user@example.com');
-await page.locator('input[value*="Retrieve" i]').click();
-await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
-            },
-          });
-          await recoverPage();
-        }
-      }
-    }
-
-    // 4. Test Variant Quantity Stepper with Pink/Green (Triggers BUG-025)
-    const greenOrPink = page.locator('[title*="green" i], [title*="pink" i], [data-color*="green" i], [data-color*="pink" i], label:has-text("Green"), label:has-text("Pink")').first();
-    if (await greenOrPink.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await greenOrPink.click().catch(() => {});
-      await page.waitForTimeout(500);
-
-      const qtyStepper = page.locator('.ec_plus, [aria-label*="increase" i], input[name*="quantity" i]').first();
-      if (await qtyStepper.isVisible()) {
-        await qtyStepper.click().catch(() => {});
-        await page.waitForTimeout(1500);
-
-        if (await isCrashOverlayVisible()) {
-          results.push({
-            passed: false,
-            status: 'FAIL',
-            message: 'Changing quantity with Pink or Green variant selected triggered a crash overlay!',
-            details: {
-              title: 'Quantity Increase with Pink or Green Color Variant Freezes UI',
-              expected: 'Selecting color variant and incrementing quantity operates smoothly.',
-              actual: 'Incrementing quantity when Pink or Green color is selected locks UI thread.',
+              title: 'Dropdown Selection Locks UI with Unhandled Crash Overlay',
+              expected: 'Selecting an option updates state smoothly without crashing UI thread.',
+              actual: `Changing option rendered a blocking crash overlay: ${crashMsg}`,
               severity: 'HIGH',
               reproductionSteps: [
                 `Navigate to ${page.url()}`,
-                'Select Green or Pink color option swatch',
-                'Click the quantity increment button',
-                'Observe page freezes completely and triggers crash overlay'
+                'Select an option from the dropdown control',
+                'Observe full-screen crash overlay is rendered'
               ],
-              consoleErrors: ['Crash bug: UI locked on variant quantity change'],
-              specSnippet: `await page.locator('label:has-text("Green")').first().click();
-await page.locator('.ec_plus').first().click();
-await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
+              consoleErrors: [crashMsg],
+              specSnippet: `const select = page.locator('select').first();
+await select.selectOption({ index: 1 });
+await page.waitForTimeout(1000);
+await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
             },
           });
-          await recoverPage();
+          await recoverView();
+          break;
         }
       }
     }
 
-    // 5. Test What We Offer Page 2 button freeze (Triggers BUG-026)
-    if (page.url().includes('what-we-offer')) {
-      const page2Btn = page.locator('a:has-text("2"), button:has-text("2")').first();
-      if (await page2Btn.isVisible()) {
-        await page2Btn.click().catch(() => {});
-        await page.waitForTimeout(1500);
+    // 2. Probe clickable options (swatches, variant labels, pagination tabs)
+    const variantControls = await page.locator(
+      '[role="radio"], [role="tab"], input[type="radio"] + label, [class*="swatch" i], [class*="variant" i] label, [class*="pagination" i] a'
+    ).all();
 
-        if (await isCrashOverlayVisible()) {
+    for (const ctrl of variantControls.slice(0, 4)) {
+      if (await ctrl.isVisible().catch(() => false)) {
+        await ctrl.click().catch(() => {});
+        await page.waitForTimeout(600);
+
+        // Also test immediate child increment or action if present
+        const plusBtn = page.locator('[class*="plus" i], [aria-label*="increase" i], [aria-label*="increment" i]').first();
+        if (await plusBtn.isVisible().catch(() => false)) {
+          await plusBtn.click().catch(() => {});
+          await page.waitForTimeout(800);
+        }
+
+        const crashMsg = await isCrashOrFreezeOverlayActive();
+        if (crashMsg) {
+          const ctrlText = await ctrl.innerText().catch(() => 'control');
           results.push({
             passed: false,
             status: 'FAIL',
-            message: 'Clicking page 2 on What We Offer triggered an unhandled crash overlay!',
+            message: `UI Liveness failure: Clicking "${ctrlText}" triggered an unhandled crash freeze overlay!`,
             details: {
-              title: 'Pagination on What We Offer Freezes UI with Crash Overlay',
-              expected: 'Clicking page 2 opens the second page of offerings.',
-              actual: 'Page becomes unresponsive with crash overlay.',
-              severity: 'CRITICAL',
+              title: `Variant/Option Interaction "${ctrlText}" Locks Application`,
+              expected: 'User interaction should update UI without locking thread or crashing.',
+              actual: 'Full-screen crash overlay rendered upon interaction.',
+              severity: 'HIGH',
               reproductionSteps: [
-                'Open https://academybugs.com/what-we-offer',
-                'Click on the second page button at the bottom',
-                'Observe the entire page becomes unresponsive'
+                `Navigate to ${page.url()}`,
+                `Click on option "${ctrlText}"`,
+                'Observe interface freezes with crash overlay'
               ],
-              specSnippet: `await page.goto('https://academybugs.com/what-we-offer');
-await page.locator('a:has-text("2")').first().click();
-await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
+              consoleErrors: [crashMsg],
+              specSnippet: `const el = page.locator(':has-text("${ctrlText.replace(/"/g, '')}")').first();
+await el.click();
+await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
             },
           });
-          await recoverPage();
+          await recoverView();
+          break;
+        }
+      }
+    }
+
+    // 3. Probe text submission actions (comments, message replies, retrieval forms)
+    const singleForm = page.locator('form:visible').first();
+    if (await singleForm.isVisible().catch(() => false)) {
+      const submitBtn = singleForm.locator('button[type="submit"], input[type="submit"]').first();
+      const textInputs = await singleForm.locator('input[type="text"], input[type="email"], textarea').all();
+
+      if (await submitBtn.isVisible().catch(() => false) && textInputs.length > 0) {
+        for (const input of textInputs.slice(0, 3)) {
+          const type = (await input.getAttribute('type')) || 'text';
+          const val = type.includes('email') ? 'test@example.com' : 'Automated QA Test Value';
+          await input.fill(val).catch(() => {});
+        }
+
+        await submitBtn.click().catch(() => {});
+        await page.waitForTimeout(1500);
+
+        const crashMsg = await isCrashOrFreezeOverlayActive();
+        if (crashMsg) {
+          results.push({
+            passed: false,
+            status: 'FAIL',
+            message: `Form submission failure: Submitting form triggered a fatal crash overlay!`,
+            details: {
+              title: 'Form Submission Triggers Unhandled Application Crash',
+              expected: 'Submitting valid form inputs should submit or validate cleanly.',
+              actual: 'Form submission resulted in a crash overlay locking user input.',
+              severity: 'HIGH',
+              reproductionSteps: [
+                `Navigate to ${page.url()}`,
+                'Fill form fields with valid test data',
+                'Click submit button',
+                'Observe crash overlay rendered'
+              ],
+              consoleErrors: [crashMsg],
+              specSnippet: `const form = page.locator('form').first();
+await form.locator('input').first().fill('test@example.com');
+await form.locator('[type="submit"]').click();
+await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
+            },
+          });
+          await recoverView();
         }
       }
     }
@@ -203,7 +167,7 @@ await expect(page.locator('.academy-crash-overlay-bug')).not.toBeVisible();`
     return {
       passed: true,
       status: 'PASS',
-      message: 'UI thread remained responsive with zero crash overlays detected.',
+      message: 'UI controls remained fully responsive with zero unhandled crash overlays detected.',
     };
   },
 };

@@ -14,7 +14,7 @@ export const cartTransitionCheck: InvariantCheck = {
   run: async (page): Promise<InvariantResult> => {
     // 1. Locate an "Add to Cart" button on the page
     const addToCartBtn = page.locator(
-      'a:has-text("ADD TO CART"), button:has-text("ADD TO CART"), [aria-label*="add to cart" i]'
+      'a:has-text("ADD TO CART"), button:has-text("ADD TO CART"), [aria-label*="add to cart" i], [class*="add_to_cart" i]'
     ).first();
 
     if (!(await addToCartBtn.isVisible({ timeout: 2000 }).catch(() => false))) {
@@ -28,7 +28,7 @@ export const cartTransitionCheck: InvariantCheck = {
 
     // 3. Navigate to Cart view
     const viewCartLink = page.locator(
-      'a:has-text("View Cart"), a:has-text("Cart"), a[href*="cart"], [aria-label*="cart" i]'
+      'a:has-text("View Cart"), a:has-text("Cart"), a[href*="cart" i], [aria-label*="cart" i]'
     ).first();
 
     if (!(await viewCartLink.isVisible({ timeout: 2000 }).catch(() => false))) {
@@ -39,7 +39,7 @@ export const cartTransitionCheck: InvariantCheck = {
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
 
     // 4. Invariant 1 (READ): Is at least 1 item visible in the cart?
-    const cartItemsCount = await page.locator('.ec_cart_item, [role="row"], tr.cart_item, .cart-item').count();
+    const cartItemsCount = await page.locator('[role="row"], tr.cart_item, .cart-item, [class*="cart_item" i], [class*="cart-item" i]').count();
     if (cartItemsCount === 0) {
       return {
         passed: false,
@@ -50,7 +50,7 @@ export const cartTransitionCheck: InvariantCheck = {
 
     // 5. Invariant 2 (DELETE): Remove the item
     const removeBtn = page.locator(
-      'a:has-text("Delete"), button:has-text("Remove"), .ec_cart_item_delete, [aria-label*="remove" i], a:has-text("×")'
+      'a:has-text("Delete"), button:has-text("Remove"), [class*="delete" i], [aria-label*="remove" i], a:has-text("×")'
     ).first();
 
     if (await removeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -59,7 +59,7 @@ export const cartTransitionCheck: InvariantCheck = {
       await page.waitForTimeout(1000);
 
       // Verify cart count decreased
-      const postDeleteCount = await page.locator('.ec_cart_item, tr.cart_item').count();
+      const postDeleteCount = await page.locator('[role="row"], tr.cart_item, .cart-item, [class*="cart_item" i], [class*="cart-item" i]').count();
       if (postDeleteCount >= cartItemsCount) {
         return {
           passed: false,

@@ -1,18 +1,20 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal Filter Monotonicity & Reversibility Invariant:
+ * 1. Monotonicity: Applying an additional filter/facet must narrow or maintain the result set:
+ *    |Filtered(S)| <= |S|.
+ * 2. Reversibility: Removing or toggling off the applied filter must restore the original set:
+ *    |Unfiltered(S)| == |Initial(S)|.
+ */
 export const filterMonotonicityCheck: InvariantCheck = {
   id: 'FILTER_MONOTONICITY',
-  name: 'Filter Monotonicity & Reversibility',
+  name: 'Filter Monotonicity & Reversibility Invariant',
   description: 'Applying a filter must narrow or preserve result counts (<= initial). Unchecking must restore original count.',
-  run: async (page): Promise<InvariantResult> => {
-    // 1. Locate an unselected filter checkbox, toggle, or facet link
-    const filterCheckbox = page.locator(
-      'aside input[type="checkbox"]:not(:checked), [role="filter"] input[type="checkbox"]:not(:checked), input[type="checkbox"]:not(:checked)'
-    ).first();
-
-    const priceFilterLink = page.locator(
-      'aside .ec_price_filter a, .academy-store-menu-link, aside a[href*="price" i], aside a:has-text("$")'
-    ).first();
+  run: async (page, context): Promise<InvariantResult> => {
+    // Locate filter checkbox or link facet
+    const filterSelector = context.targetSelector || 'aside input[type="checkbox"]:not(:checked), [role="filter"] input[type="checkbox"]:not(:checked), aside a[href*="filter" i], aside a[href*="price" i]';
+    const filterCtrl = page.locator(filterSelector).first();
 
     const getItemCount = async (): Promise<number> => {
       const badge = page.locator('[data-testid*="count"], [aria-live="polite"], .results-count').first();
@@ -21,69 +23,87 @@ export const filterMonotonicityCheck: InvariantCheck = {
         const num = text.match(/\b\d+[\d,]*\b/);
         if (num) return parseInt(num[0].replace(/,/g, ''), 10);
       }
-      return await page.locator('.ec_product_li, [role="row"], [role="article"], li.product').count();
+      return await page.locator('[role="article"], [role="row"], [role="listitem"], .card, [class*="product" i], tr, li').count();
     };
 
     const initialCount = await getItemCount();
 
-    if (await filterCheckbox.isVisible({ timeout: 1500 }).catch(() => false)) {
-      await filterCheckbox.check();
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-      const filteredCount = await getItemCount();
+    if (await filterCtrl.isVisible({ timeout: 1500 }).catch(() => false)) {
+      const isCheckbox = await filterCtrl.evaluate((el: HTMLElement) => el.tagName.toLowerCase() === 'input');
 
-      if (filteredCount > initialCount) {
-        return {
-          passed: false,
-          status: 'FAIL',
-          message: `Filter violated monotonicity! Count increased from ${initialCount} to ${filteredCount}.`,
-        };
-      }
+      if (isCheckbox) {
+        await filterCtrl.check();
+        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        const filteredCount = await getItemCount();
 
-      await filterCheckbox.uncheck();
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-      const restoredCount = await getItemCount();
+        if (filteredCount > initialCount) {
+          return {
+            passed: false,
+            status: 'FAIL',
+            message: `Filter violated monotonicity! Count increased from ${initialCount} to ${filteredCount}.`,
+            details: {
+              title: 'Filter Application Increased Total Result Count',
+              expected: 'Applying a filter constraint must narrow or maintain candidate result count.',
+              actual: `Item count expanded from ${initialCount} to ${filteredCount}.`,
+              severity: 'HIGH',
+              reproductionSteps: [
+                `Navigate to ${page.url()}`,
+                'Select filter checkbox',
+                'Observe result count increased'
+              ],
+              specSnippet: `const initial = await page.locator('[role="article"], .card').count();
+await page.locator('${filterSelector}').first().check();
+await page.waitForTimeout(1000);
+const filtered = await page.locator('[role="article"], .card').count();
+expect(filtered).toBeLessThanOrEqual(initial);`
+            }
+          };
+        }
 
-      if (restoredCount !== initialCount) {
-        return {
-          passed: false,
-          status: 'FAIL',
-          message: `Filter reversibility failed! Expected ${initialCount}, got ${restoredCount}.`,
-        };
-      }
-    } else if (await priceFilterLink.isVisible({ timeout: 1500 }).catch(() => false)) {
-      // Test link-based price filter facet
-      const initialUrl = page.url();
-      await priceFilterLink.click();
-      await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
-      await page.waitForTimeout(1000);
+        await filterCtrl.uncheck();
+        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        const restoredCount = await getItemCount();
 
-      const filteredCount = await getItemCount();
-      const newUrl = page.url();
+        if (restoredCount !== initialCount) {
+          return {
+            passed: false,
+            status: 'FAIL',
+            message: `Filter reversibility failed! Expected ${initialCount}, got ${restoredCount}.`,
+          };
+        }
+      } else {
+        // Link-based facet
+        const initialUrl = page.url();
+        await filterCtrl.click();
+        await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(1000);
 
-      // If clicking price filter reloads the exact same page with 0 count reduction
-      if (filteredCount >= initialCount && filteredCount > 0 && (newUrl === initialUrl || !newUrl.includes('price'))) {
-        return {
-          passed: false,
-          status: 'FAIL',
-          message: `Price filter is completely inoperative: clicked filter tier, but catalog remained at ${filteredCount} items without filtering!`,
-          details: {
-            title: 'Price Range Filter Is Inoperative / Reloads Unfiltered Page',
-            expected: 'Selecting a price range must filter the catalog ($C_{\\text{filtered}} < C_{\\text{initial}}$).',
-            actual: `Clicking price filter left catalog unchanged at ${filteredCount} items.`,
-            severity: 'MEDIUM',
-            reproductionSteps: [
-              'Navigate to https://academybugs.com/find-bugs/',
-              'Locate the Filter by Price section in the sidebar',
-              'Click on any price range link',
-              'Observe that the catalog is not filtered'
-            ],
-            specSnippet: `const initialCount = await page.locator('.ec_product_li').count();
-await page.locator('aside a:has-text("$")').first().click();
+        const filteredCount = await getItemCount();
+        const newUrl = page.url();
+
+        if (filteredCount >= initialCount && filteredCount > 0 && newUrl === initialUrl) {
+          return {
+            passed: false,
+            status: 'FAIL',
+            message: `Filter facet is completely inoperative: clicked facet link, but catalog remained at ${filteredCount} items without filtering!`,
+            details: {
+              title: 'Filter Facet Link Is Inoperative (0 State Change)',
+              expected: 'Clicking filter facet link must narrow results or update URL.',
+              actual: `Clicking facet link left view unchanged at ${filteredCount} items.`,
+              severity: 'MEDIUM',
+              reproductionSteps: [
+                `Navigate to ${page.url()}`,
+                'Click on filter facet link',
+                'Observe catalog results and URL do not update'
+              ],
+              specSnippet: `const initial = await page.locator('[role="article"], .card').count();
+await page.locator('${filterSelector}').first().click();
 await page.waitForLoadState('domcontentloaded');
-const filteredCount = await page.locator('.ec_product_li').count();
-expect(filteredCount).toBeLessThan(initialCount);`
-          },
-        };
+const filtered = await page.locator('[role="article"], .card').count();
+expect(filtered).toBeLessThan(initial);`
+            },
+          };
+        }
       }
     } else {
       return { passed: true, status: 'SKIPPED', message: 'No filter controls found on this page.' };

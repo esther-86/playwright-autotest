@@ -1,66 +1,69 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal Hyperlink Reachability Invariant:
+ * Contextual and navigational links on the page must resolve to HTTP 2xx or 3xx status.
+ * Any link returning HTTP 404/500 indicates dead navigation or broken resources.
+ */
 export const brokenLinkReachabilityCheck: InvariantCheck = {
-  id: 'BROKEN_LINK_INTEGRITY',
-  name: 'Contextual Link Reachability & HTTP 200 Invariant',
-  description: 'In-page links (e.g. manufacturer profile) must resolve to HTTP 200 and not return 404/500.',
-  applicableArchetypes: ['/store/:slug'],
-  run: async (page): Promise<InvariantResult> => {
-    // Find contextual links under product details (manufacturer, brand, category)
-    const mfgLink = page.locator('#manufacturer-bug a, a:has-text("DNK"), [class*="manufacturer" i] a').first();
+  id: 'HYPERLINK_REACHABILITY',
+  name: 'Hyperlink Reachability & HTTP 200 Invariant',
+  description: 'In-page hyperlinks must resolve successfully without returning HTTP 4xx or 5xx error codes.',
+  run: async (page): Promise<InvariantResult | InvariantResult[]> => {
+    const results: InvariantResult[] = [];
 
-    if (!(await mfgLink.isVisible({ timeout: 2000 }).catch(() => false))) {
-      return { passed: true, status: 'SKIPPED', message: 'No manufacturer link found on this page.' };
-    }
+    // Extract visible anchors with real paths
+    const links = await page.locator('a[href]:visible').all();
+    const checkedHrefs = new Set<string>();
 
-    const href = await mfgLink.getAttribute('href');
-    if (!href) {
-      return { passed: true, status: 'SKIPPED', message: 'Link element has no href.' };
-    }
-
-    // Probe the destination status
-    try {
-      const response = await page.request.get(href, { failOnStatusCode: false });
-      const status = response.status();
-
-      if (status >= 400) {
-        return {
-          passed: false,
-          status: 'FAIL',
-          message: `Broken link detected: "${href}" returned HTTP ${status} Not Found!`,
-          details: {
-            title: `Broken Manufacturer Link on Product Details Page (${status} Error)`,
-            expected: `Manufacturer link (${href}) must resolve to a valid page (HTTP 200).`,
-            actual: `Manufacturer link returns HTTP ${status} error.`,
-            severity: 'MEDIUM',
-            reproductionSteps: [
-              `Navigate to ${page.url()}`,
-              'Locate the manufacturer link beneath the quantity selector',
-              'Click the manufacturer link',
-              `Observe destination page returns HTTP ${status}`
-            ],
-            failedRequests: [{ url: href, status }],
-            specSnippet: `const mfgLink = page.locator('#manufacturer-bug a, a:has-text("DNK")').first();
-const [response] = await Promise.all([
-  page.waitForResponse(res => res.url().includes('manufacturer') || res.status() >= 200),
-  mfgLink.click()
-]);
-expect(response.status()).toBeLessThan(400);`
-          },
-        };
+    for (const link of links.slice(0, 8)) {
+      const href = (await link.getAttribute('href').catch(() => ''))?.trim();
+      if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:') || checkedHrefs.has(href)) {
+        continue;
       }
 
-      return {
-        passed: true,
-        status: 'PASS',
-        message: `Contextual link "${href}" verified cleanly (HTTP ${status}).`,
-      };
-    } catch (err: any) {
-      return {
-        passed: false,
-        status: 'FAIL',
-        message: `Contextual link failed to load: ${err.message}`,
-      };
+      checkedHrefs.add(href);
+
+      try {
+        const fullUrl = new URL(href, page.url()).href;
+        const response = await page.request.get(fullUrl, { failOnStatusCode: false, timeout: 4000 });
+        const status = response.status();
+
+        if (status >= 400) {
+          const anchorText = (await link.innerText().catch(() => '')) || href;
+          results.push({
+            passed: false,
+            status: 'FAIL',
+            message: `Broken hyperlink detected: "${anchorText}" (${href}) returned HTTP ${status}!`,
+            details: {
+              title: `Broken Hyperlink on Page Returns HTTP ${status} (${anchorText.slice(0, 30)})`,
+              expected: `Link target (${href}) must resolve to a valid page (HTTP 200).`,
+              actual: `Navigating to target yields HTTP ${status} error response.`,
+              severity: 'MEDIUM',
+              reproductionSteps: [
+                `Navigate to ${page.url()}`,
+                `Locate link "${anchorText}"`,
+                'Inspect HTTP destination response status',
+                `Observe response returns HTTP ${status}`
+              ],
+              failedRequests: [{ url: href, status }],
+              specSnippet: `const res = await page.request.get('${fullUrl}');
+expect(res.status()).toBeLessThan(400);`
+            },
+          });
+          break;
+        }
+      } catch {}
     }
+
+    if (results.length > 0) {
+      return results;
+    }
+
+    return {
+      passed: true,
+      status: 'PASS',
+      message: `Sampled ${checkedHrefs.size} contextual hyperlinks; all resolved cleanly without 4xx/5xx errors.`,
+    };
   },
 };

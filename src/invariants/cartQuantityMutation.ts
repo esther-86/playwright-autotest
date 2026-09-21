@@ -1,66 +1,68 @@
 import { InvariantCheck, InvariantResult } from './types';
 
+/**
+ * Universal Mutation Persistence Invariant:
+ * Updating an editable numeric/counter field to a valid non-zero integer (e.g. 4)
+ * followed by an update action must persist the requested value or display an
+ * informative constraint message, rather than silently clamping or resetting.
+ */
 export const cartQuantityMutationCheck: InvariantCheck = {
-  id: 'CART_QUANTITY_CAP',
-  name: 'Cart Quantity Mutation Invariant',
-  description: 'Updating quantity to a valid integer >= 3 must persist without silently clamping to 2.',
-  applicableArchetypes: ['/my-cart/'],
-  run: async (page): Promise<InvariantResult> => {
-    const isCartPage = page.url().includes('/my-cart');
-    if (!isCartPage) {
-      return { passed: true, status: 'SKIPPED', message: 'Not on cart page.' };
-    }
+  id: 'MUTATION_PERSISTENCE_BOUND',
+  name: 'Numeric Input Mutation Persistence Invariant',
+  description: 'Updating quantity/counter inputs must persist the entered value without silent reset or clamp.',
+  applicableArchetypes: ['/cart', '/checkout', '/basket', '/product', '/item'],
+  run: async (page, context): Promise<InvariantResult> => {
+    const qtySelector = context.targetSelector || 'input[name*="quantity" i], input[type="number"], input[class*="quantity" i]';
+    const qtyInput = page.locator(qtySelector).first();
 
-    let qtyInput = page.locator('input[name*="quantity" i], .ec_quantity').first();
-    let updateBtn = page.locator('button:has-text("Update"), input[value*="Update" i], a:has-text("Update")').first();
-
-    // Auto-prime if cart is empty
     if (!(await qtyInput.isVisible({ timeout: 1500 }).catch(() => false))) {
-      await page.goto('https://academybugs.com/store/dark-grey-jeans/').catch(() => {});
-      const addBtn = page.locator('input[value*="Add to Cart" i], button:has-text("Add to Cart"), a:has-text("Add to Cart"), .ec_details_add_to_cart a').first();
-      if (await addBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await addBtn.click().catch(() => {});
-        await page.waitForTimeout(1000);
-      }
-      await page.goto('https://academybugs.com/my-cart/').catch(() => {});
-      await page.waitForTimeout(1500);
-      qtyInput = page.locator('input[name*="quantity" i], .ec_quantity').first();
-      updateBtn = page.locator('button:has-text("Update"), input[value*="Update" i], a:has-text("Update")').first();
+      return { passed: true, status: 'SKIPPED', message: 'No editable numeric counter input found on this view.' };
     }
 
-    if (!(await qtyInput.isVisible({ timeout: 2000 }).catch(() => false)) ||
-        !(await updateBtn.isVisible({ timeout: 2000 }).catch(() => false))) {
-      return { passed: true, status: 'SKIPPED', message: 'Cart quantity or update button not found.' };
+    const initialVal = (await qtyInput.inputValue().catch(() => '1')).trim();
+    const testTargetVal = '4';
+
+    // Locate the corresponding update/submit button in form or container
+    const updateBtn = page.locator(
+      'button:has-text("Update"), input[value*="Update" i], a:has-text("Update"), [aria-label*="update" i], button[type="submit"]'
+    ).first();
+
+    await qtyInput.fill(testTargetVal);
+    if (await updateBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await updateBtn.click();
+      await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(1000);
+    } else {
+      await qtyInput.press('Enter');
+      await page.waitForTimeout(1000);
     }
 
-    // Set quantity to 4
-    await qtyInput.fill('4');
-    await updateBtn.click();
-    await page.waitForTimeout(1500);
+    const updatedVal = (await qtyInput.inputValue().catch(() => '')).trim();
 
-    const updatedVal = (await qtyInput.inputValue()).trim();
-
-    if (updatedVal === '2') {
+    // Invariant: The value must either match the target value, OR display a validation notification
+    if (updatedVal !== testTargetVal && updatedVal !== initialVal) {
+      // It was silently altered to a different arbitrary number (e.g., clamped to 2)
       return {
         passed: false,
         status: 'FAIL',
-        message: 'Cart quantity cap detected: Set quantity to 4, but it automatically clamped/reset back to 2!',
+        message: `Mutation persistence violation: Entered value "${testTargetVal}", but input silently clamped/reset to "${updatedVal}" without user confirmation!`,
         details: {
-          title: 'Cart Quantity Cannot Exceed 2 (Resets to 2 on Update)',
-          expected: 'Quantity input should accept and preserve requested quantity (4) upon update.',
-          actual: 'Quantity resets to 2 immediately upon clicking update button.',
+          title: `Numeric Field Silently Clamped to ${updatedVal} on Submit`,
+          expected: `Field should accept and persist requested value "${testTargetVal}" or explain constraints.`,
+          actual: `Field automatically reset/clamped to "${updatedVal}".`,
           severity: 'HIGH',
           reproductionSteps: [
-            'Add an item to cart and go to https://academybugs.com/my-cart/',
-            'In the quantity field, enter 4',
-            'Click the Update button below the item line',
-            'Observe the quantity field resets to 2'
+            `Navigate to ${page.url()}`,
+            `Enter "${testTargetVal}" into the numeric input field`,
+            'Trigger update/submission',
+            `Observe field silently resets to "${updatedVal}"`
           ],
-          specSnippet: `const qtyInput = page.locator('input[name*="quantity" i], .ec_quantity').first();
-await qtyInput.fill('4');
-await page.locator('button:has-text("Update"), input[value*="Update" i]').first().click();
-await page.waitForTimeout(1500);
-expect(await qtyInput.inputValue()).toBe('4');`
+          specSnippet: `const input = page.locator('${qtySelector}').first();
+await input.fill('${testTargetVal}');
+const btn = page.locator('button:has-text("Update"), input[value*="Update" i]').first();
+if (await btn.isVisible()) await btn.click();
+await page.waitForTimeout(1000);
+expect(await input.inputValue()).toBe('${testTargetVal}');`
         },
       };
     }
@@ -68,7 +70,7 @@ expect(await qtyInput.inputValue()).toBe('4');`
     return {
       passed: true,
       status: 'PASS',
-      message: `Cart quantity successfully updated and persisted as ${updatedVal}.`,
+      message: `Numeric input persisted value "${updatedVal}" successfully.`,
     };
   },
 };

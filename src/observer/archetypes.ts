@@ -1,6 +1,6 @@
 /**
  * Converts specific URLs into generalized Archetypes (Equivalence Partitions).
- * E.g.: /store/dnk-yellow-shoes/ -> /store/:slug
+ * E.g.: /store/item-xyz/ -> /store/:slug
  */
 export function getUrlArchetype(rawUrl: string): string {
   try {
@@ -9,9 +9,9 @@ export function getUrlArchetype(rawUrl: string): string {
 
     // Normalize IDs, slugs, and hashes
     const normalizedPath = path
-      // Replace product/item slugs: /store/shoes-xyz -> /store/:slug
-      .replace(/\/store\/[^/]+\/?$/i, '/store/:slug')
-      // Replace product IDs or numeric endpoints: /items/123 -> /items/:id
+      // Replace product/item slugs: /store/item-xyz -> /store/:slug
+      .replace(/\/(store|products|items|item|product|listing)\/[^/]+\/?$/i, '/$1/:slug')
+      // Replace numeric endpoints: /items/123 -> /items/:id
       .replace(/\/\d+(\/|$)/g, '/:id$1')
       // Replace UUIDs: /records/e4b1a8-... -> /records/:uuid
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':uuid');

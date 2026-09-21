@@ -52,7 +52,7 @@ async function main() {
     if (harvestedSeeds.length === 0) {
       console.log('Sniffing DOM items for fallback seeds...');
       const domTitles = await harvestPage
-        .locator('.ec_product_title, td.title a, h1, h2, h3, [role="article"] a')
+        .locator('h1, h2, h3, [role="article"] a, [class*="title" i] a, td.title a')
         .allInnerTexts();
 
       for (const t of domTitles) {
@@ -94,17 +94,22 @@ async function main() {
         await isolatedPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
         await isolatedPage.waitForTimeout(1000);
 
-        const res = await check.run(isolatedPage, invContext);
-        results.push({ name: check.name, status: res.status, message: res.message });
+        const rawRes = await check.run(isolatedPage, invContext);
+        const checkResults = Array.isArray(rawRes) ? rawRes : [rawRes];
 
-        if (res.status === 'PASS') {
-          console.log('✅ PASS');
-        } else if (res.status === 'SKIPPED') {
-          console.log('⚠️  SKIPPED');
-        } else {
-          console.log('❌ FAIL');
+        for (const res of checkResults) {
+          const entryName = res.details?.title || check.name;
+          results.push({ name: entryName, status: res.status, message: res.message });
+
+          if (res.status === 'PASS') {
+            console.log('✅ PASS');
+          } else if (res.status === 'SKIPPED') {
+            console.log('⚠️  SKIPPED');
+          } else {
+            console.log('❌ FAIL');
+          }
+          console.log(`    ↳ ${res.message}`);
         }
-        console.log(`    ↳ ${res.message}`);
       } catch (err: any) {
         results.push({ name: check.name, status: 'FAIL', message: err.message });
         console.log('❌ ERROR');
