@@ -7,7 +7,8 @@
     "test": "npx tsx src/runner.ts",
     "test:headed": "HEADLESS=false npx tsx src/runner.ts",
     "explore": "npx tsx src/explorer.ts",
-    "explore:headed": "HEADLESS=false npx tsx src/explorer.ts"
+    "explore:headed": "HEADLESS=false npx tsx src/explorer.ts",
+    "agent:stream": ".venv/bin/python scripts/stream_agent.py"
   },
   "keywords": [
     "playwright",
