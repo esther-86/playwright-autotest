@@ -32,6 +32,23 @@ export const perPageLimitCheck: InvariantCheck = {
         passed: false,
         status: 'FAIL',
         message: `Bug detected! Selected "View ${limit}", but ${visibleItemCount} items are still rendered on screen!`,
+        details: {
+          title: `Page Size Upper Bound Violated (Selected View ${limit}, Rendered ${visibleItemCount})`,
+          expected: `Selecting View ${limit} must restrict visible product cards to <= ${limit}.`,
+          actual: `${visibleItemCount} items rendered on screen (${visibleItemCount} > ${limit}).`,
+          severity: 'HIGH',
+          reproductionSteps: [
+            'Navigate to https://academybugs.com/find-bugs/',
+            `Click on "${limit}" in per-page limit controls`,
+            'Count visible product cards',
+            `Observe ${visibleItemCount} cards are rendered`
+          ],
+          specSnippet: `const perPage = page.locator('span.ec_product_page_perpage a:has-text("${limit}")').first();
+await perPage.click();
+await page.waitForTimeout(1000);
+const count = await page.locator('.ec_product_li').count();
+expect(count).toBeLessThanOrEqual(${limit});`
+        },
       };
     }
 

@@ -4,11 +4,10 @@
   "description": "Metamorphic & Invariant Web Testing powered by Dynamic Seed Harvesting",
   "main": "src/runner.ts",
   "scripts": {
-    "test": "npx tsx src/runner.ts",
-    "test:headed": "HEADLESS=false npx tsx src/runner.ts",
-    "explore": "npx tsx src/explorer.ts",
-    "explore:headed": "HEADLESS=false npx tsx src/explorer.ts",
-    "agent:stream": ".venv/bin/python scripts/stream_agent.py"
+    "test": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/runner.ts",
+    "test:headed": "HEADLESS=false PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/runner.ts",
+    "explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/explorer.ts",
+    "explore:headed": "HEADLESS=false PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/explorer.ts"
   },
   "keywords": [
     "playwright",
@@ -24,6 +23,7 @@
     "playwright": "^1.63.0"
   },
   "devDependencies": {
+    "@types/node": "^20.19.43",
     "tsx": "^4.23.14",
     "typescript": "^5.0.0"
   }

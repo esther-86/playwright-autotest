@@ -3,3 +3,4 @@ node_modules/
 .secrets
 logs/
 .venv/
+/queue/
