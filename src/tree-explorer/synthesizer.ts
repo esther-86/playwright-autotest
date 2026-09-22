@@ -16,14 +16,15 @@ export function synthesizePlaywrightSuite(targetUrl: string, journeys: Discovere
         const escapedLocator = step.locator.replace(/'/g, "\\'");
 
         let actionCode = '';
+        const escapedValue = (step.value || '').replace(/'/g, "\\'");
         if (step.actionType === 'CLICK') {
           actionCode = `await ${varName}.click();`;
         } else if (step.actionType === 'SELECT') {
-          actionCode = `await ${varName}.selectOption('${step.value || '1'}');`;
+          actionCode = `await ${varName}.selectOption('${escapedValue || '1'}');`;
         } else if (step.actionType === 'CHECK') {
           actionCode = `await ${varName}.check();`;
         } else if (step.actionType === 'TYPE') {
-          actionCode = `await ${varName}.fill('${step.value || 'test'}');`;
+          actionCode = `await ${varName}.fill('${escapedValue || 'test'}');`;
         }
 
         return `

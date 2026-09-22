@@ -131,12 +131,21 @@ async function fallbackHeuristicDiscovery(
   includeMenuHeaderFooter: boolean = false,
   excludedUrlPatterns: string[] = []
 ): Promise<DiscoveredAction[]> {
+  interface RawOptionItem {
+    value: string;
+    text: string;
+    selected: boolean;
+  }
+
   interface RawElementItem {
     tag: string;
     type: string;
     role: string;
+    id?: string;
+    name?: string;
     accName: string;
     href?: string;
+    options?: RawOptionItem[];
     cardIndex: number;
     cardTitle: string;
     cardTag: string;
@@ -166,6 +175,16 @@ async function fallbackHeuristicDiscovery(
     }
 
     function getAccName(el) {
+      if (el.tagName === 'SELECT') {
+        const labelEl = el.labels && el.labels[0] ? el.labels[0].innerText : '';
+        return (
+          el.getAttribute('aria-label') ||
+          labelEl ||
+          el.getAttribute('title') ||
+          el.getAttribute('name') ||
+          'sort'
+        ).trim().replace(/\\s+/g, ' ');
+      }
       return (
         el.getAttribute('aria-label') ||
         el.getAttribute('title') ||
@@ -276,12 +295,27 @@ async function fallbackHeuristicDiscovery(
       const cardTitle = cardIdx >= 0 ? findCardTitle(bestCards[cardIdx]) : '';
       const cardTag = cardIdx >= 0 ? bestCards[cardIdx].tagName.toLowerCase() : '';
 
+      let options = undefined;
+      if (tag === 'SELECT') {
+        const selectEl = el;
+        options = Array.from(selectEl.options)
+          .filter((opt) => !opt.disabled && opt.text && opt.text.trim())
+          .map((opt) => ({
+            value: opt.value || opt.text.trim(),
+            text: opt.text.trim(),
+            selected: opt.selected,
+          }));
+      }
+
       items.push({
         tag,
         type,
         role,
+        id: el.id || undefined,
+        name: el.getAttribute('name') || undefined,
         accName,
         href,
+        options,
         cardIndex: cardIdx,
         cardTitle,
         cardTag,
@@ -320,11 +354,31 @@ async function fallbackHeuristicDiscovery(
     let locator = '';
 
     if (item.tag === 'SELECT') {
-      category = 'SORTING';
-      actionType = 'SELECT';
-      description = item.accName ? `Change selection on "${item.accName}"` : 'Change sorting or dropdown option';
-      expectedInvariant = 'Selection updates view or page order';
-      locator = item.accName ? `role=combobox[name="${item.accName}"]` : 'select:visible';
+      const selectLocator = item.id
+        ? `select#${item.id}:visible`
+        : item.name
+        ? `select[name="${item.name}"]:visible`
+        : 'select:visible';
+
+      const optionItems =
+        item.options && item.options.length > 0
+          ? item.options
+          : [{ value: '1', text: 'Option', selected: false }];
+
+      for (const opt of optionItems) {
+        const optVal = opt.value || opt.text;
+        const optTitle = opt.text || opt.value;
+        actions.push({
+          id: `sort_${optVal}`.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+          category: 'SORTING',
+          locator: selectLocator,
+          actionType: 'SELECT',
+          value: optVal,
+          description: `Sort by "${optTitle}"`,
+          expectedInvariant: `Re-orders display items according to "${optTitle}"`,
+        });
+      }
+      continue;
     } else if (item.type === 'checkbox' || item.type === 'radio') {
       category = 'FILTER';
       actionType = 'CHECK';
