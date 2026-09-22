@@ -1,5 +1,23 @@
 import { BrainDecision, InvariantTestSelection, LLMBrain, PageElement } from './types';
 
+export function getScopePolicyPrompt(): string {
+  const maxDepth = parseInt(process.env.MAX_EXPLORATION_DEPTH || '2', 10);
+  return `## Scope Policy
+
+The target page is the root of an exploration flow.
+
+1. Explore controls within the target page's main-content area.
+2. You may follow actions originating in that area, including result details,
+   pagination, filters, forms, dialogs, and their subsequent steps.
+3. Do not interact with global navigation: headers, menus, footers, logos,
+   account links, or unrelated site features.
+4. A destination is not automatically allowed just because it has the same
+   domain. It must be causally connected to an in-scope content action.
+5. Track exploration depth. Do not proceed beyond ${maxDepth} child levels from the
+   target page unless explicitly configured.
+6. When an action is out of scope, record it as SKIPPED_OUT_OF_SCOPE.`;
+}
+
 /**
  * Creates the appropriate brain based on LLM_PROVIDER in .env
  */
@@ -139,23 +157,26 @@ function createAntigravityHeuristicBrain(): LLMBrain {
         return { action: 'CLICK', target: cookieBtn.selector, reason: 'Dismissing cookie banner to unblock view' };
       }
 
-      // 2. Discover and explore functional content links (filtering legal/cookie fluff)
       const isBoilerplate = (name: string) =>
         /(cookie|privacy|terms|policy|skip to content|disclaimer|copyright)/i.test(name);
+
+      const isOutOfScopeNav = (name: string) =>
+        /(submit\s*(a\s*)?bug|about|blog|account|login|sign\s*in|home|menu|contact|contact\s*us)/i.test(name) ||
+        isBoilerplate(name);
 
       const contentLink = elements.find(
         (e) =>
           e.role === 'link' &&
-          !isBoilerplate(e.name) &&
+          !isOutOfScopeNav(e.name) &&
           e.name.length > 2 &&
           !e.selector.includes('#')
       );
 
       if (contentLink) {
-        return { action: 'CLICK', target: contentLink.selector, reason: `Navigating to explore route: "${contentLink.name}"` };
+        return { action: 'CLICK', target: contentLink.selector, reason: `Navigating to in-scope flow route: "${contentLink.name}"` };
       }
 
-      return { action: 'STOP', reason: 'No new actionable navigational links found' };
+      return { action: 'STOP', reason: 'No new in-scope navigational actions found' };
     },
   };
 }
@@ -200,8 +221,16 @@ Output a JSON array: [{"invariantId": string, "targetSelector"?: string, "params
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) return fallback.decideNextStep(elements, currentUrl);
 
-      const prompt = `You are a Web QA Explorer. Page: ${currentUrl}. Controls: ${JSON.stringify(elements.slice(0, 20))}.
-Output JSON: {"action": "CLICK"|"STOP", "target": "selector", "reason": "why"}.`;
+      const prompt = `You are an Autonomous Web QA Explorer.
+Current Page: ${currentUrl}.
+Visible Semantic Controls: ${JSON.stringify(elements.slice(0, 30))}.
+
+${getScopePolicyPrompt()}
+
+Instructions:
+Select next action within the main content area (e.g. details card, pagination, filter, modal).
+Output JSON: {"action": "CLICK"|"STOP", "target": "selector", "reason": "why"}.
+If an action is out of scope per policy, do not select it. If no in-scope action is found, return {"action": "STOP", "reason": "No in-scope actions remaining"}.`;
 
       try {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;

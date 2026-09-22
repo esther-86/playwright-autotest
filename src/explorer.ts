@@ -1,14 +1,22 @@
 import 'dotenv/config';
 import { chromium } from 'playwright';
 import { getBrain } from './brain';
-import { extractInteractiveElements } from './observer/treeParser';
+import { extractInteractiveElements, getMainContentLocator, isInExplorationScope } from './observer/treeParser';
 import { getUrlArchetype } from './observer/archetypes';
 import { invariantChecklist, InvariantContext } from './invariants';
 import { BugQueue, CandidateBugMetadata } from './queue/bugQueue';
 import { logger } from './utils/logger';
 
+export interface FlowPage {
+  url: string;
+  depth: number;
+  reachedFrom: string;
+  trigger: string;
+}
+
 async function runExplorer() {
   const startUrl = process.env.TARGET_URL || 'https://academybugs.com/find-bugs/';
+  const maxDepth = parseInt(process.env.MAX_EXPLORATION_DEPTH || '2', 10);
   const headless = process.env.HEADLESS !== 'false';
   const timeBudgetSeconds = parseInt(process.env.EXPLORATION_TIME_SECONDS || '300', 10);
   const timeBudgetMs = timeBudgetSeconds * 1000;
@@ -20,6 +28,7 @@ async function runExplorer() {
     origin: startUrl,
     provider: process.env.LLM_PROVIDER,
     timeBudget: `${timeBudgetSeconds}s`,
+    maxDepth,
     availableInvariants: invariantChecklist.length,
   });
 
@@ -33,7 +42,31 @@ async function runExplorer() {
 
   const visitedUrls = new Set<string>();
   const visitedArchetypes = new Set<string>();
-  const unvisitedQueue: string[] = [startUrl];
+
+  // Feature-Flow Ledger maintains causal ancestry
+  const flowQueue: FlowPage[] = [
+    {
+      url: startUrl,
+      depth: 0,
+      reachedFrom: 'START',
+      trigger: 'Initial target',
+    },
+  ];
+
+  const rootOrigin = new URL(startUrl).origin;
+
+  function mayFollow(
+    sourceWasInMainContent: boolean,
+    depth: number,
+    destination: URL,
+  ): boolean {
+    return (
+      sourceWasInMainContent &&
+      depth < maxDepth &&
+      destination.origin === rootOrigin
+    );
+  }
+
 
   const knownBugFingerprints = new Set<string>();
   const packagedBugs: string[] = [];
@@ -48,8 +81,9 @@ async function runExplorer() {
   const invariantMap = new Map(invariantChecklist.map((c) => [c.id, c]));
 
   try {
-    while (unvisitedQueue.length > 0 && Date.now() - startTime < timeBudgetMs) {
-      const currentUrl = unvisitedQueue.shift()!;
+    while (flowQueue.length > 0 && Date.now() - startTime < timeBudgetMs) {
+      const currentFlow = flowQueue.shift()!;
+      const currentUrl = currentFlow.url;
       if (visitedUrls.has(currentUrl)) continue;
 
       const archetype = getUrlArchetype(currentUrl);
@@ -57,7 +91,10 @@ async function runExplorer() {
       visitedArchetypes.add(archetype);
 
       const elapsedSec = Math.round((Date.now() - startTime) / 1000);
-      logger.info('NAVIGATE', `Visiting [${archetype}] [${elapsedSec}s / ${timeBudgetSeconds}s]: ${currentUrl}`);
+      logger.info(
+        'NAVIGATE',
+        `Visiting [${archetype}] [Depth ${currentFlow.depth}/${maxDepth}] [${elapsedSec}s / ${timeBudgetSeconds}s]: ${currentUrl} (via: ${currentFlow.trigger})`
+      );
 
       try {
         await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
@@ -76,30 +113,51 @@ async function runExplorer() {
         await page.waitForTimeout(500);
       }
 
-      // 1. Discover Interactive Elements on current screen
+      const mainContent = getMainContentLocator(page);
+      const hasMain = (await mainContent.count().catch(() => 0)) > 0;
+
+      // 1. Discover Interactive Elements strictly scoped inside main-content
       const elements = await extractInteractiveElements(page);
-      logger.info('OBSERVER', `Discovered ${elements.length} semantic controls on ${currentUrl}`);
+      logger.info('OBSERVER', `Discovered ${elements.length} semantic controls in main content on ${currentUrl}`);
 
-      // 2. Discover new internal navigation links dynamically
-      const originHost = new URL(startUrl).hostname;
-      const discoveredHrefs = await page
-        .locator('a[href]')
-        .evaluateAll((anchors: any[]) => anchors.map((a) => a.href))
-        .catch(() => [] as string[]);
+      // 2. Discover new navigation links dynamically from within main content
+      const linkCandidates = (hasMain ? mainContent : page).locator('a[href]:visible');
+      const linkCount = await linkCandidates.count().catch(() => 0);
 
-      for (const rawUrl of discoveredHrefs) {
+      let newlyQueued = 0;
+      for (let i = 0; i < Math.min(linkCount, 35); i++) {
         try {
-          const parsed = new URL(rawUrl);
+          const anchor = linkCandidates.nth(i);
+          const rawUrl = await anchor.getAttribute('href');
+          if (!rawUrl || rawUrl === '#' || rawUrl.startsWith('javascript:')) continue;
+
+          // Scope check: must belong to mainContent and avoid blocked chrome ancestors
+          const inScope = hasMain ? await isInExplorationScope(anchor, mainContent) : true;
+          if (!inScope) {
+            continue;
+          }
+
+          const parsed = new URL(rawUrl, currentUrl);
+          const linkText = (await anchor.innerText().catch(() => '')) || 'In-scope card/link';
+
           if (
-            parsed.hostname === originHost &&
             !parsed.hash &&
             !visitedUrls.has(parsed.href) &&
-            !unvisitedQueue.includes(parsed.href)
+            !flowQueue.some((f) => f.url === parsed.href) &&
+            mayFollow(inScope, currentFlow.depth, parsed)
           ) {
-            unvisitedQueue.push(parsed.href);
+            newlyQueued++;
+            flowQueue.push({
+              url: parsed.href,
+              depth: currentFlow.depth + 1,
+              reachedFrom: currentUrl,
+              trigger: linkText.trim().replace(/\s+/g, ' ').slice(0, 40),
+            });
           }
         } catch {}
       }
+      logger.info('FLOW', `Discovered and queued ${newlyQueued} in-scope feature-flow routes from ${currentUrl}`);
+
 
       // 3. LLM Runtime Invariant Selection & Parameterization
       const selections = await brain.selectInvariantsForPage(elements, currentUrl);
@@ -175,14 +233,49 @@ async function runExplorer() {
         }
       }
 
-      // 4. Autonomous Navigation via Brain
+      // 4. Autonomous Navigation via Brain with Feature-Flow Boundary Protection
       const decision = await brain.decideNextStep(elements, currentUrl);
       if (decision.action === 'CLICK' && decision.target) {
+        const targetLocator = page.locator(decision.target).first();
+        const hasTarget = (await targetLocator.count().catch(() => 0)) > 0;
+
+        if (hasTarget && hasMain) {
+          const inScope = await isInExplorationScope(targetLocator, mainContent);
+          if (!inScope) {
+            logger.warn(
+              'SCOPE',
+              `Action target out of scope (chrome/nav ancestor detected): "${decision.target}" - SKIPPED_OUT_OF_SCOPE`
+            );
+            continue;
+          }
+        }
+
         logger.info('ACTION', `Brain navigating: Click on ${decision.target}`);
-        await page.locator(decision.target).click().catch(() => {});
+        await targetLocator.click().catch(() => {});
         await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+        const navigatedUrl = page.url();
+        if (
+          navigatedUrl !== currentUrl &&
+          !visitedUrls.has(navigatedUrl) &&
+          !flowQueue.some((f) => f.url === navigatedUrl)
+        ) {
+          try {
+            const parsed = new URL(navigatedUrl);
+            if (mayFollow(true, currentFlow.depth, parsed)) {
+              flowQueue.unshift({
+                url: navigatedUrl,
+                depth: currentFlow.depth + 1,
+                reachedFrom: currentUrl,
+                trigger: `Brain action: ${decision.target}`,
+              });
+              logger.info('FLOW', `Brain action navigated directly to child route [Depth ${currentFlow.depth + 1}]: ${navigatedUrl}`);
+            }
+          } catch {}
+        }
       }
     }
+
 
     try {
       await context.tracing.stop();

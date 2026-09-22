@@ -1,17 +1,67 @@
-import { Page } from 'playwright';
+import { Locator, Page } from 'playwright';
 import { PageElement } from '../brain/types';
 
+export const BLOCKED_ANCESTORS = [
+  'header',
+  'footer',
+  'nav',
+  '[role="navigation"]',
+  '[role="banner"]',
+  '.site-header',
+  '.site-footer',
+  '.main-menu',
+];
+
 /**
- * Extracts clean, interactive elements using Playwright's native ariaSnapshot()
- * with a fallback for custom clickable CSS elements.
+ * Returns the locator representing the page's primary main-content container.
+ */
+export function getMainContentLocator(page: Page): Locator {
+  return page.locator('main, [role="main"], #main-content, .site-content, article').first();
+}
+
+/**
+ * Validates that an element is within the primary content container
+ * and not part of global site navigation or chrome.
+ */
+export async function isInExplorationScope(
+  element: Locator,
+  mainContent: Locator,
+): Promise<boolean> {
+  try {
+    const mainHandle = await mainContent.elementHandle();
+    if (!mainHandle) return false;
+
+    // Action must belong to this page's content, not surrounding site chrome.
+    const isContained = await element.evaluate(
+      (node, root) => (root as Node).contains(node as Node),
+      mainHandle,
+    );
+    if (!isContained) return false;
+
+    // Extra protection for menus nested inside unusual layouts.
+    return await element.evaluate(
+      (node, blocked) => !blocked.some((selector) => !!(node as Element).closest(selector)),
+      BLOCKED_ANCESTORS,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extracts clean, interactive elements strictly scoped to the page's main content area.
  */
 export async function extractInteractiveElements(page: Page): Promise<PageElement[]> {
   const interactive: PageElement[] = [];
   const seenNames = new Set<string>();
 
-  // 1. Playwright modern ARIA Snapshot (Clean standard)
+  const mainContent = getMainContentLocator(page);
+  const hasMainContent = (await mainContent.count().catch(() => 0)) > 0;
+  const rootLocator = hasMainContent ? mainContent : page.locator('body');
+
+  // 1. Playwright modern ARIA Snapshot scoped to main content
   try {
-    const rawSnapshot = await page.locator('body').ariaSnapshot({ timeout: 3000 });
+    const rawSnapshot = await rootLocator.ariaSnapshot({ timeout: 3000 });
     const lines = rawSnapshot.split('\n');
 
     for (const line of lines) {
@@ -31,21 +81,44 @@ export async function extractInteractiveElements(page: Page): Promise<PageElemen
       }
     }
   } catch {
-    // If ariaSnapshot fails or is unsupported, continue to fallback
+    // If ariaSnapshot fails or is unsupported, continue to candidates fallback
   }
 
-  // 2. Fallback: Detect visible standard links, buttons, and inputs
+  // 2. Fallback / supplementary discovery: Detect visible action candidates in main content
   try {
-    const clickables = await page
-      .locator('button:visible, a[href]:visible, input:visible, select:visible')
-      .all();
+    const candidates = rootLocator.locator(`
+      a[href]:visible,
+      button:visible,
+      input:visible,
+      select:visible,
+      textarea:visible,
+      [role="button"]:visible,
+      [role="link"]:visible
+    `);
 
-    for (const el of clickables.slice(0, 30)) {
-      const text = (await el.innerText().catch(() => '')).trim();
-      if (text.length > 0 && text.length < 50 && !seenNames.has(text)) {
+    const count = await candidates.count().catch(() => 0);
+    const limit = Math.min(count, 40);
+
+    for (let i = 0; i < limit; i++) {
+      const el = candidates.nth(i);
+
+      // Verify element is strictly in exploration scope
+      if (hasMainContent && !(await isInExplorationScope(el, mainContent))) {
+        continue;
+      }
+
+      const text = (
+        (await el.innerText().catch(() => '')) ||
+        (await el.getAttribute('aria-label').catch(() => '')) ||
+        (await el.getAttribute('placeholder').catch(() => '')) ||
+        (await el.getAttribute('value').catch(() => '')) ||
+        ''
+      ).trim();
+
+      if (text.length > 0 && text.length < 60 && !seenNames.has(text)) {
         seenNames.add(text);
         const tag = await el.evaluate((e) => e.tagName.toLowerCase()).catch(() => 'button');
-        const role = tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : 'button';
+        const role = tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : tag === 'input' ? 'textbox' : 'button';
 
         interactive.push({
           role,
@@ -58,3 +131,4 @@ export async function extractInteractiveElements(page: Page): Promise<PageElemen
 
   return interactive;
 }
+
