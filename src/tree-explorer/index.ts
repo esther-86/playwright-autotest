@@ -3,7 +3,7 @@ import { chromium, Browser } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
 import { computeStateFingerprint } from './fingerprint';
-import { discoverScreenActions } from './discovery';
+import { discoverScreenActions, isUrlExcluded } from './discovery';
 import { replayTrace, executeDepthStep } from './executor';
 import { synthesizePlaywrightSuite } from './synthesizer';
 import { config as defaultConfig, AppConfig } from '../config';
@@ -39,7 +39,12 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
     const rootFingerprint = await computeStateFingerprint(initPage);
     visitedFingerprints.add(rootFingerprint);
 
-    const rootActions = await discoverScreenActions(initPage, config.maxBreadthPerScreen);
+    const rootActions = await discoverScreenActions(
+      initPage,
+      config.maxBreadthPerScreen,
+      config.includeMenuHeaderFooter,
+      config.excludedUrlPatterns
+    );
     await initContext.close();
 
     console.log(`Root state initialized (${rootFingerprint}). Discovered ${rootActions.length} initial actions:`);
@@ -97,8 +102,21 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
         visitedFingerprints.add(nextFingerprint);
         console.log(`  ✨ Transitioned to new state: ${nextFingerprint}`);
 
+        const currentUrl = page.url();
+        if (isUrlExcluded(currentUrl, config.excludedUrlPatterns)) {
+          console.log(`  ⛔ Excluded URL reached (${currentUrl}). Not expanding actions.`);
+          completedJourneys.push([...currentNode.traceSoFar, action]);
+          await context.close();
+          continue;
+        }
+
         // Breadth Discovery on the new screen
-        const newActions = await discoverScreenActions(page, config.maxBreadthPerScreen);
+        const newActions = await discoverScreenActions(
+          page,
+          config.maxBreadthPerScreen,
+          config.includeMenuHeaderFooter,
+          config.excludedUrlPatterns
+        );
         console.log(`  Discovered ${newActions.length} new actions in this state.`);
 
         // Push child state node onto stack to continue DFS
@@ -106,7 +124,7 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
           id: `node-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           depth: currentNode.depth + 1,
           fingerprint: nextFingerprint,
-          url: page.url(),
+          url: currentUrl,
           traceSoFar: [...currentNode.traceSoFar, action],
           unexploredActions: newActions,
         });
