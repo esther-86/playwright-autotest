@@ -107,3 +107,29 @@ Real-world websites frequently violate pure math for business or UX reasons:
    - *Guard:* Inspect for did-you-mean microcopy and remap the comparison token.
 3. **Eventual Consistency:** Creating an entity in a CQRS microservice backend might not instantly appear in read queries.
    - *Guard:* Bounded exponential backoff (up to 3 seconds) for state mutations before flagging an invariant violation.
+
+---
+
+## 6. Site-Agnostic Statistical & Topological Clustering Architecture
+
+To maintain universal autonomy across any domain (e-commerce, SaaS, GitHub, CRM, blogs) and any human language without static test scripts:
+
+1. **Topology-Driven Container Induction:**
+   Repeated item containers (cards, data tables, feeds) are detected purely through structural topology (a parent element containing $\ge 3$ sibling children sharing uniform tags with interactables). Never relies on hardcoded CSS classes (no `.product-card`, `.ec_product_li`).
+
+2. **Mathematical Separation of Titles vs. Action Controls:**
+   Distinguishes unique entity identifiers from repeated action controls without keyword blacklists using text frequency across sibling elements:
+   $$\text{Freq}(t) = \frac{\sum_{i=1}^N \mathbf{1}(t \in C_i)}{N}$$
+   - Entity Titles have frequency $\text{Freq}(t) \le \frac{1}{N}$ (unique per card) combined with semantic heading tags (`h1`–`h6`, `[role="heading"]`).
+   - Action Controls and badges have frequency $\text{Freq}(t) \ge \frac{2}{N}$ (repeated across sibling cards).
+
+3. **Dynamic Action-Signature Family Clustering:**
+   Sibling cards are clustered into distinct functional families by their primary action control's accessible label (e.g. Family `"ADD TO CART"`, Family `"SELECT OPTIONS"`, Family `"Star"`, Family `"Edit"`).
+
+4. **Cross-Card Action Diversification ("Don't do the same thing for each product"):**
+   For each detected card family, distinct actions are allocated across different products:
+   - Product 1 in family tests **Detail Navigation**.
+   - Product 2 in family tests the **Primary Action Control**.
+   - Subsequent products in that family avoid redundant tests.
+   - Single-product families test their action directly without being skipped.
+

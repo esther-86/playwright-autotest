@@ -149,6 +149,7 @@ async function fallbackHeuristicDiscovery(
     cardIndex: number;
     cardTitle: string;
     cardTag: string;
+    isCardTitleLink: boolean;
   }
 
   const rawData = await page.evaluate<RawElementItem[]>(`(() => {
@@ -185,11 +186,14 @@ async function fallbackHeuristicDiscovery(
           'sort'
         ).trim().replace(/\\s+/g, ' ');
       }
+      const img = el.querySelector ? el.querySelector('img') : null;
+      const imgAlt = img ? img.getAttribute('alt') || '' : '';
       return (
         el.getAttribute('aria-label') ||
         el.getAttribute('title') ||
         (el instanceof HTMLInputElement ? (el.value || el.placeholder || '') : '') ||
         el.innerText ||
+        imgAlt ||
         ''
       ).trim().replace(/\\s+/g, ' ');
     }
@@ -225,27 +229,58 @@ async function fallbackHeuristicDiscovery(
       return -1;
     }
 
-    function findCardTitle(card) {
-      const heading = card.querySelector(
-        'h1, h2, h3, h4, h5, [class*="title" i], [class*="name" i], strong, b'
+    // Measure text frequency across all candidate cards to mathematically separate
+    // unique entity titles (frequency === 1) from repeated action controls (frequency >= 2)
+    const textFrequency = new Map();
+    for (const card of bestCards) {
+      const textsInThisCard = new Set();
+      const allTextEls = Array.from(
+        card.querySelectorAll('h1, h2, h3, h4, h5, h6, a, button, [role="button"], [role="link"], span, strong, b')
       );
-      if (heading) {
-        const text = heading.innerText ? heading.innerText.trim() : '';
-        if (text && text.length > 1 && text.length < 80) return text;
-      }
-      const anchors = Array.from(card.querySelectorAll('a'));
-      for (const a of anchors) {
-        const text = a.innerText ? a.innerText.trim() : '';
-        if (
-          text &&
-          text.length > 1 &&
-          text.length < 80 &&
-          !/^(add|buy|select|view|more|click|delete|remove|login)/i.test(text)
-        ) {
-          return text;
+      for (const el of allTextEls) {
+        const txt = (el.innerText || '').trim();
+        if (txt && txt.length > 1 && txt.length < 80 && !textsInThisCard.has(txt)) {
+          textsInThisCard.add(txt);
+          textFrequency.set(txt, (textFrequency.get(txt) || 0) + 1);
         }
       }
-      return '';
+    }
+
+    function findCardTitle(card) {
+      // 1. Semantic heading: h1 through h6 or role="heading"
+      const headings = Array.from(
+        card.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"], [class*="title" i], [class*="name" i]')
+      );
+      for (const h of headings) {
+        const text = (h.innerText || '').trim();
+        if (text && text.length > 1 && text.length < 80) {
+          // If heading text is unique or near-unique across cards, it is definitely the title
+          if ((textFrequency.get(text) || 0) <= 2) {
+            return text;
+          }
+        }
+      }
+
+      // 2. Anchors whose text is unique across cards (frequency === 1)
+      const anchors = Array.from(card.querySelectorAll('a'));
+      for (const a of anchors) {
+        const text = (a.innerText || '').trim();
+        if (text && text.length > 1 && text.length < 80) {
+          if ((textFrequency.get(text) || 0) <= 1) {
+            return text;
+          }
+        }
+      }
+
+      // 3. Fallback: longest anchor text in the card
+      let longest = '';
+      for (const a of anchors) {
+        const text = (a.innerText || '').trim();
+        if (text && text.length > longest.length && text.length < 80 && (textFrequency.get(text) || 0) < bestCards.length) {
+          longest = text;
+        }
+      }
+      return longest;
     }
 
     // 2. Discover all visible interactive controls
@@ -295,6 +330,15 @@ async function fallbackHeuristicDiscovery(
       const cardTitle = cardIdx >= 0 ? findCardTitle(bestCards[cardIdx]) : '';
       const cardTag = cardIdx >= 0 ? bestCards[cardIdx].tagName.toLowerCase() : '';
 
+      const isCardTitleLink =
+        cardIdx >= 0 &&
+        tag === 'A' &&
+        cardTitle &&
+        (accName.toLowerCase() === cardTitle.toLowerCase() ||
+          cardTitle.toLowerCase().includes(accName.toLowerCase()) ||
+          accName.toLowerCase().includes(cardTitle.toLowerCase()) ||
+          !!el.closest('h1, h2, h3, h4, h5, h6, [role="heading"]'));
+
       let options = undefined;
       if (tag === 'SELECT') {
         const selectEl = el;
@@ -319,6 +363,7 @@ async function fallbackHeuristicDiscovery(
         cardIndex: cardIdx,
         cardTitle,
         cardTag,
+        isCardTitleLink: !!isCardTitleLink,
       });
     }
 
@@ -434,96 +479,178 @@ async function fallbackHeuristicDiscovery(
     });
   }
 
-  // --- B. Process Card-Level Controls (Diversified across cards) ---
-  // "if different products, don't do the same thing for each product..."
-  const usedCardArchetypes = new Set<string>();
+  // --- B. Process Card-Level Controls (Dynamic Topology & Action Signature Clustering) ---
+  // Zero site-specific or language-specific regexes. Purely driven by DOM topology and element labels.
+
+  interface CardRecord {
+    cardIdx: number;
+    cardTitle: string;
+    cardTag: string;
+    titleLink?: (typeof cardItems)[0];
+    actionControls: typeof cardItems;
+    primaryActionLabel: string;
+  }
+
+  const cardRecords: CardRecord[] = [];
 
   for (const [cardIdx, itemsInCard] of cardsMap.entries()) {
-    let selectedItem: (typeof itemsInCard)[0] | null = null;
-    let chosenArchetype = '';
+    const cardTitle = itemsInCard[0]?.cardTitle || '';
+    const cardTag = itemsInCard[0]?.cardTag || '*';
 
-    for (const item of itemsInCard) {
-      let archetype = 'SECONDARY_ACTION';
-      const isButton = item.tag === 'BUTTON' || item.role === 'button' || item.type === 'submit';
-      const isSelect = item.tag === 'SELECT' || item.type === 'checkbox' || item.type === 'radio';
-      const isTitleLink =
-        item.tag === 'A' &&
-        item.cardTitle &&
-        (item.accName.toLowerCase() === item.cardTitle.toLowerCase() ||
-          item.cardTitle.toLowerCase().includes(item.accName.toLowerCase()) ||
-          item.accName.toLowerCase().includes(item.cardTitle.toLowerCase()));
-
-      if (isSelect) {
-        archetype = 'OPTION_SELECT';
-      } else if (
-        isButton ||
-        (!isTitleLink && item.accName.length > 0 && /^(add|buy|order|cart|checkout|get|subscribe|sign)/i.test(item.accName))
-      ) {
-        archetype = 'PRIMARY_ACTION';
-      } else if (isTitleLink || (item.tag === 'A' && item.href)) {
-        archetype = 'DETAIL_LINK';
-      }
-
-      if (!usedCardArchetypes.has(archetype)) {
-        selectedItem = item;
-        chosenArchetype = archetype;
-        break;
-      }
+    // Find title link: prefer item flagged as title link or matching cardTitle
+    let titleLink = itemsInCard.find(
+      (item) =>
+        item.isCardTitleLink ||
+        (item.tag === 'A' &&
+          cardTitle &&
+          (item.accName.toLowerCase() === cardTitle.toLowerCase() ||
+            cardTitle.toLowerCase().includes(item.accName.toLowerCase())))
+    );
+    if (!titleLink) {
+      // Fallback: first anchor with href
+      titleLink = itemsInCard.find((item) => item.tag === 'A' && item.href);
     }
 
-    if (selectedItem && chosenArchetype) {
-      usedCardArchetypes.add(chosenArchetype);
+    // Action controls: all interactables that are not the title link
+    const actionControls = itemsInCard.filter((item) => item !== titleLink);
 
-      const cardLabel = selectedItem.cardTitle || `item #${cardIdx + 1}`;
-      let category: DiscoveredAction['category'] = 'NAVIGATION';
-      let actionType: DiscoveredAction['actionType'] = 'CLICK';
-      let description = '';
-      let expectedInvariant = '';
-      let locator = '';
+    // Primary action label: text of the first action control, or 'DETAIL_ONLY'
+    const primaryActionLabel = actionControls[0]?.accName?.trim() || 'DETAIL_ONLY';
 
-      if (chosenArchetype === 'DETAIL_LINK') {
-        category = 'NAVIGATION';
-        actionType = 'CLICK';
-        description = `View details for "${cardLabel}"`;
-        expectedInvariant = 'Navigates to item detail view';
-        locator = selectedItem.accName
-          ? `a:visible:has-text("${selectedItem.accName}")`
-          : `${selectedItem.cardTag || '*'}:has-text("${cardLabel}") a:visible`;
-      } else if (chosenArchetype === 'PRIMARY_ACTION') {
-        category = 'STATE_MUTATION';
-        actionType = 'CLICK';
-        description = `Perform "${selectedItem.accName || 'action'}" on "${cardLabel}"`;
-        expectedInvariant = 'Item state mutates (e.g. added to transaction or state updated)';
-        locator = selectedItem.cardTitle
-          ? `${selectedItem.cardTag || '*'}:has-text("${cardLabel}") >> :visible:has-text("${selectedItem.accName}")`
-          : `:visible:has-text("${selectedItem.accName}")`;
-      } else if (chosenArchetype === 'OPTION_SELECT') {
-        category = 'CONFIGURABLE_ITEM';
-        actionType = selectedItem.tag === 'SELECT' ? 'SELECT' : 'CHECK';
-        description = `Configure option on "${cardLabel}"`;
-        expectedInvariant = 'Configurable option updates item state';
-        locator = selectedItem.cardTitle
-          ? `${selectedItem.cardTag || '*'}:has-text("${cardLabel}") >> ${selectedItem.tag.toLowerCase()}:visible`
-          : `${selectedItem.tag.toLowerCase()}:visible`;
-      } else {
-        category = 'NAVIGATION';
-        actionType = 'CLICK';
-        description = `Trigger "${selectedItem.accName}" on "${cardLabel}"`;
-        expectedInvariant = 'Transitions state for item';
-        locator = selectedItem.cardTitle
-          ? `${selectedItem.cardTag || '*'}:has-text("${cardLabel}") >> :visible:has-text("${selectedItem.accName}")`
-          : `:visible:has-text("${selectedItem.accName}")`;
-      }
+    cardRecords.push({
+      cardIdx,
+      cardTitle,
+      cardTag,
+      titleLink,
+      actionControls,
+      primaryActionLabel,
+    });
+  }
+
+  // Group cards into families by their primary action signature
+  const families = new Map<string, CardRecord[]>();
+  for (const card of cardRecords) {
+    if (!families.has(card.primaryActionLabel)) {
+      families.set(card.primaryActionLabel, []);
+    }
+    families.get(card.primaryActionLabel)!.push(card);
+  }
+
+  // Identify majority family (standard/default product type on the page)
+  let majorityFamilyLabel = '';
+  let maxCount = 0;
+  for (const [label, cards] of families.entries()) {
+    if (cards.length > maxCount) {
+      maxCount = cards.length;
+      majorityFamilyLabel = label;
+    }
+  }
+
+  // Diversified Action Allocation:
+  // "if different products, don't do the same thing for each product..."
+  for (const [actionLabel, cardsInFamily] of families.entries()) {
+    const isMajority = actionLabel === majorityFamilyLabel;
+
+    // --- Action A: Detail Navigation for this card family ---
+    // Tested on Card 0 of this family
+    const detailCard = cardsInFamily[0];
+    if (detailCard && detailCard.titleLink) {
+      const cardLabel = detailCard.cardTitle || `item #${detailCard.cardIdx + 1}`;
+      const safeCardTitle = detailCard.cardTitle ? detailCard.cardTitle.replace(/"/g, '\\"') : '';
+      const locator = safeCardTitle
+        ? `a:visible:has-text("${safeCardTitle}")`
+        : `${detailCard.cardTag}:nth-child(${detailCard.cardIdx + 1}) a:visible`;
+
+      // Differentiate specialized card families (e.g. items with "SELECT OPTIONS")
+      const description =
+        isMajority || actionLabel === 'DETAIL_ONLY'
+          ? `View details for "${cardLabel}"`
+          : `View details for item with "${actionLabel}" ("${cardLabel}")`;
 
       actions.push({
-        id: `card_${cardIdx + 1}_${chosenArchetype.toLowerCase()}`,
+        id: `card_${detailCard.cardIdx + 1}_view_details`,
+        category: 'NAVIGATION',
+        locator,
+        actionType: 'CLICK',
+        description,
+        expectedInvariant: `Navigates to detail view for "${cardLabel}"`,
+      });
+    }
+
+    // --- Action B: Primary Action Control for this card family ---
+    // If multiple cards exist in the family, test action on Card 1 (a different product!).
+    // If only 1 card exists, test on Card 0 so coverage is not lost.
+    if (actionLabel !== 'DETAIL_ONLY') {
+      const actionCard = cardsInFamily.length > 1 ? cardsInFamily[1] : cardsInFamily[0];
+      const cardLabel = actionCard.cardTitle || `item #${actionCard.cardIdx + 1}`;
+      const safeCardTitle = actionCard.cardTitle ? actionCard.cardTitle.replace(/"/g, '\\"') : '';
+      const safeActionLabel = actionLabel.replace(/"/g, '\\"');
+      const actionItem = actionCard.actionControls[0];
+
+      let category: DiscoveredAction['category'] = 'STATE_MUTATION';
+      let actionType: DiscoveredAction['actionType'] = 'CLICK';
+
+      if (actionItem?.tag === 'SELECT') {
+        category = 'CONFIGURABLE_ITEM';
+        actionType = 'SELECT';
+      } else if (actionItem?.type === 'checkbox' || actionItem?.type === 'radio') {
+        category = 'CONFIGURABLE_ITEM';
+        actionType = 'CHECK';
+      }
+
+      const locator = safeCardTitle
+        ? `${actionCard.cardTag}:has-text("${safeCardTitle}") >> :visible:has-text("${safeActionLabel}")`
+        : `:visible:has-text("${safeActionLabel}")`;
+
+      actions.push({
+        id: `card_${actionCard.cardIdx + 1}_action`,
         category,
         locator,
         actionType,
         value: actionType === 'SELECT' ? '1' : undefined,
-        description,
-        expectedInvariant,
+        description: `Perform "${actionLabel}" on "${cardLabel}"`,
+        expectedInvariant: `Triggers "${actionLabel}" on "${cardLabel}"`,
       });
+    }
+
+    // --- Action C: Additional Distinct Action Controls ---
+    // If cards in this family have secondary distinct controls (e.g. swatches, favorite button),
+    // allocate each distinct control to subsequent cards in the family without repeating
+    const testedActionLabels = new Set<string>([actionLabel]);
+    let nextCardIdx = 2;
+
+    for (const card of cardsInFamily) {
+      for (const ctrl of card.actionControls) {
+        const ctrlLabel = ctrl.accName?.trim();
+        if (ctrlLabel && !testedActionLabels.has(ctrlLabel) && nextCardIdx < cardsInFamily.length) {
+          testedActionLabels.add(ctrlLabel);
+          const targetCard = cardsInFamily[nextCardIdx++];
+          const cardLabel = targetCard.cardTitle || `item #${targetCard.cardIdx + 1}`;
+          const safeCardTitle = targetCard.cardTitle ? targetCard.cardTitle.replace(/"/g, '\\"') : '';
+          const safeCtrlLabel = ctrlLabel.replace(/"/g, '\\"');
+
+          let category: DiscoveredAction['category'] = 'STATE_MUTATION';
+          let actionType: DiscoveredAction['actionType'] = 'CLICK';
+          if (ctrl.tag === 'SELECT' || ctrl.type === 'checkbox' || ctrl.type === 'radio') {
+            category = 'CONFIGURABLE_ITEM';
+            actionType = ctrl.tag === 'SELECT' ? 'SELECT' : 'CHECK';
+          }
+
+          const locator = safeCardTitle
+            ? `${targetCard.cardTag}:has-text("${safeCardTitle}") >> :visible:has-text("${safeCtrlLabel}")`
+            : `:visible:has-text("${safeCtrlLabel}")`;
+
+          actions.push({
+            id: `card_${targetCard.cardIdx + 1}_secondary_${ctrlLabel.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`,
+            category,
+            locator,
+            actionType,
+            value: actionType === 'SELECT' ? '1' : undefined,
+            description: `Perform "${ctrlLabel}" on "${cardLabel}"`,
+            expectedInvariant: `Triggers "${ctrlLabel}" on "${cardLabel}"`,
+          });
+        }
+      }
     }
   }
 
