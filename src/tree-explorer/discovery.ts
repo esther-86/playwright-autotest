@@ -497,22 +497,36 @@ async function fallbackHeuristicDiscovery(
     const cardTitle = itemsInCard[0]?.cardTitle || '';
     const cardTag = itemsInCard[0]?.cardTag || '*';
 
-    // Find title link: prefer item flagged as title link or matching cardTitle
-    let titleLink = itemsInCard.find(
-      (item) =>
-        item.isCardTitleLink ||
-        (item.tag === 'A' &&
-          cardTitle &&
-          (item.accName.toLowerCase() === cardTitle.toLowerCase() ||
-            cardTitle.toLowerCase().includes(item.accName.toLowerCase())))
-    );
-    if (!titleLink) {
-      // Fallback: first anchor with href
-      titleLink = itemsInCard.find((item) => item.tag === 'A' && item.href);
-    }
+    // Helper: identify elements that link to the entity/detail page rather than being action controls
+    const isEntityOrDetailLink = (item: (typeof itemsInCard)[0]) => {
+      if (item.tag !== 'A' && item.role !== 'link') return false;
+      if (item.isCardTitleLink) return true;
+      const normAcc = (item.accName || '').toLowerCase().trim();
+      const normTitle = cardTitle.toLowerCase().trim();
+      // Empty anchor (e.g. image cover link wrapper) is a navigation wrapper, not an action control
+      if (!normAcc) return true;
+      // If accessible text matches or is part of the card title, it represents the entity itself
+      if (normTitle) {
+        if (normAcc === normTitle) return true;
+        if (normAcc.length >= 3 && (normTitle.includes(normAcc) || normAcc.includes(normTitle))) return true;
+      }
+      return false;
+    };
 
-    // Action controls: all interactables that are not the title link
-    const actionControls = itemsInCard.filter((item) => item !== titleLink);
+    // Find the primary title link (prefer anchor explicitly matching cardTitle over image link)
+    let titleLink =
+      itemsInCard.find(
+        (item) =>
+          item.tag === 'A' &&
+          cardTitle &&
+          item.accName.toLowerCase().trim() === cardTitle.toLowerCase().trim()
+      ) ||
+      itemsInCard.find((item) => item.isCardTitleLink) ||
+      itemsInCard.find(isEntityOrDetailLink) ||
+      itemsInCard.find((item) => item.tag === 'A' && item.href);
+
+    // Action controls: all interactables that are NOT entity/detail links
+    const actionControls = itemsInCard.filter((item) => !isEntityOrDetailLink(item));
 
     // Primary action label: text of the first action control, or 'DETAIL_ONLY'
     const primaryActionLabel = actionControls[0]?.accName?.trim() || 'DETAIL_ONLY';
