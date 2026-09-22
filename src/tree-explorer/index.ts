@@ -1,0 +1,157 @@
+import 'dotenv/config';
+import { chromium, Browser } from 'playwright';
+import * as fs from 'fs';
+import * as path from 'path';
+import { computeStateFingerprint } from './fingerprint';
+import { discoverScreenActions } from './discovery';
+import { replayTrace, executeDepthStep } from './executor';
+import { synthesizePlaywrightSuite } from './synthesizer';
+import { config as defaultConfig, AppConfig } from '../config';
+import { DiscoveredAction, StateTreeNode } from './types';
+
+/**
+ * Explores the web application as a dynamic State-Transition Tree.
+ * Follows DFS to chain actions down user journeys, and backtracks cleanly.
+ */
+export async function exploreStateTree(config: AppConfig = defaultConfig): Promise<DiscoveredAction[][]> {
+  const browser: Browser = await chromium.launch({ headless: config.headless });
+  const visitedFingerprints = new Set<string>();
+  const completedJourneys: DiscoveredAction[][] = [];
+  const timeBudgetMs = config.explorationTimeSeconds * 1000;
+  const startTime = Date.now();
+
+  console.log('='.repeat(65));
+  console.log('🌲 AUTONOMOUS STATE-TREE WEB QA ENGINE');
+  console.log(`🌐 Target URL:   ${config.targetUrl}`);
+  console.log(`🔍 Max Depth:    ${config.maxExplorationDepth}`);
+  console.log(`📊 Max Breadth:  ${config.maxBreadthPerScreen} actions/screen`);
+  console.log(`⏱ Time Budget:  ${config.explorationTimeSeconds}s`);
+  console.log(`🕶 Headless:     ${config.headless}`);
+  console.log('='.repeat(65));
+
+  try {
+    // 1. Initialize Root Node
+    console.log('\n[Phase 1: Initializing Root State]');
+    const initContext = await browser.newContext();
+    const initPage = await initContext.newPage();
+    await initPage.goto(config.targetUrl, { waitUntil: 'domcontentloaded' });
+
+    const rootFingerprint = await computeStateFingerprint(initPage);
+    visitedFingerprints.add(rootFingerprint);
+
+    const rootActions = await discoverScreenActions(initPage, config.maxBreadthPerScreen);
+    await initContext.close();
+
+    console.log(`Root state initialized (${rootFingerprint}). Discovered ${rootActions.length} initial actions:`);
+    rootActions.forEach((a, i) => console.log(`  ${i + 1}. [${a.category}] ${a.description}`));
+
+    const rootNode: StateTreeNode = {
+      id: 'node-root',
+      depth: 0,
+      fingerprint: rootFingerprint,
+      url: config.targetUrl,
+      traceSoFar: [],
+      unexploredActions: rootActions,
+    };
+
+    const stack: StateTreeNode[] = [rootNode];
+
+    // 2. DFS Traversal Loop
+    console.log('\n[Phase 2: Executing State-Tree Traversal]');
+    while (stack.length > 0 && Date.now() - startTime < timeBudgetMs) {
+      const currentNode = stack[stack.length - 1];
+
+      // Termination Condition: Max depth or no actions left at this node
+      if (currentNode.unexploredActions.length === 0 || currentNode.depth >= config.maxExplorationDepth) {
+        if (currentNode.traceSoFar.length > 0) {
+          completedJourneys.push(currentNode.traceSoFar);
+          const flowSummary = currentNode.traceSoFar.map((s) => s.description).join(' ➔ ');
+          console.log(`\n✔ Completed Journey (${currentNode.traceSoFar.length} steps): ${flowSummary}`);
+        }
+        stack.pop();
+        continue;
+      }
+
+      // Pick next unexplored action from current node
+      const action = currentNode.unexploredActions.shift()!;
+      console.log(`\n▶ [Depth ${currentNode.depth + 1}] Exploring: "${action.description}"`);
+
+      // Clean Backtracking: Replay trace up to this node in a fresh browser context
+      const { page, context } = await replayTrace(browser, config.targetUrl, currentNode.traceSoFar);
+
+      // Execute Depth Step
+      const { nextFingerprint, transitioned, error } = await executeDepthStep(
+        page,
+        action,
+        currentNode.fingerprint
+      );
+
+      if (error) {
+        console.log(`  ⚠ Step failed: ${error}`);
+        await context.close();
+        continue;
+      }
+
+      // If action caused a state transition and is not an already-visited state loop
+      if (transitioned && !visitedFingerprints.has(nextFingerprint)) {
+        visitedFingerprints.add(nextFingerprint);
+        console.log(`  ✨ Transitioned to new state: ${nextFingerprint}`);
+
+        // Breadth Discovery on the new screen
+        const newActions = await discoverScreenActions(page, config.maxBreadthPerScreen);
+        console.log(`  Discovered ${newActions.length} new actions in this state.`);
+
+        // Push child state node onto stack to continue DFS
+        stack.push({
+          id: `node-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          depth: currentNode.depth + 1,
+          fingerprint: nextFingerprint,
+          url: page.url(),
+          traceSoFar: [...currentNode.traceSoFar, action],
+          unexploredActions: newActions,
+        });
+      } else if (transitioned && visitedFingerprints.has(nextFingerprint)) {
+        console.log(`  🔄 State loop detected (${nextFingerprint}). Concluding branch.`);
+        completedJourneys.push([...currentNode.traceSoFar, action]);
+      } else {
+        console.log(`  ℹ In-place interaction (no screen transition).`);
+        completedJourneys.push([...currentNode.traceSoFar, action]);
+      }
+
+      await context.close();
+    }
+
+    if (Date.now() - startTime >= timeBudgetMs) {
+      console.log(`\n⏱ Exploration stopped: reached time budget of ${config.explorationTimeSeconds}s.`);
+    }
+
+    // 3. Synthesize Standalone Test Suite
+    console.log('\n[Phase 3: Synthesizing Standalone Playwright Test Suite]');
+    const specContent = synthesizePlaywrightSuite(config.targetUrl, completedJourneys);
+
+    const artifactsDir = path.resolve(__dirname, '../../artifacts');
+    fs.mkdirSync(artifactsDir, { recursive: true });
+    const specPath = path.join(artifactsDir, 'state-tree-journeys.spec.ts');
+    fs.writeFileSync(specPath, specContent, 'utf-8');
+
+    console.log(`\n🎉 Exploration complete! Synthesized ${completedJourneys.length} multi-step tests.`);
+    console.log(`📁 Test file written to: ${specPath}\n`);
+
+    return completedJourneys;
+  } finally {
+    await browser.close();
+  }
+}
+
+// Direct CLI Execution
+if (require.main === module) {
+  const runnerConfig: AppConfig = { ...defaultConfig };
+  if (process.argv[2]) {
+    runnerConfig.targetUrl = process.argv[2];
+  }
+
+  exploreStateTree(runnerConfig).catch((err) => {
+    console.error('Fatal State-Tree error:', err);
+    process.exit(1);
+  });
+}

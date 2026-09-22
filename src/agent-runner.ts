@@ -1,14 +1,14 @@
-import 'dotenv/config';
 import { chromium } from 'playwright';
 import { logger } from './utils/logger';
+import { config } from './config';
 
 /**
  * Lean Browser Driver for AI Agents (Under 45 lines).
  * Connects the AI directly to the browser with zero bloat.
  */
 export async function launchPage(url?: string) {
-  const targetUrl = url || process.env.TARGET_URL || 'https://academybugs.com/find-bugs/';
-  const headless = process.env.HEADLESS !== 'false';
+  const targetUrl = url || config.targetUrl;
+  const headless = config.headless;
 
   logger.info('BROWSER', `Launching browser session for ${targetUrl}`);
   const browser = await chromium.launch({ headless });

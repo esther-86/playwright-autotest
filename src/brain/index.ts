@@ -1,7 +1,8 @@
 import { BrainDecision, InvariantTestSelection, LLMBrain, PageElement } from './types';
+import { config } from '../config';
 
 export function getScopePolicyPrompt(): string {
-  const maxDepth = parseInt(process.env.MAX_EXPLORATION_DEPTH || '2', 10);
+  const maxDepth = config.maxExplorationDepth;
   return `## Scope Policy
 
 The target page is the root of an exploration flow.
@@ -22,7 +23,7 @@ The target page is the root of an exploration flow.
  * Creates the appropriate brain based on LLM_PROVIDER in .env
  */
 export function getBrain(): LLMBrain {
-  const provider = (process.env.LLM_PROVIDER || 'antigravity').toLowerCase();
+  const provider = config.llmProvider;
 
   switch (provider) {
     case 'gemini':
@@ -190,7 +191,7 @@ function createGeminiBrain(): LLMBrain {
   return {
     providerName: 'Google Gemini',
     selectInvariantsForPage: async (elements, currentUrl) => {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = config.geminiApiKey;
       if (!apiKey) return fallback.selectInvariantsForPage(elements, currentUrl);
 
       const prompt = `You are a Metamorphic Web QA Architect.
@@ -218,7 +219,7 @@ Output a JSON array: [{"invariantId": string, "targetSelector"?: string, "params
     },
 
     decideNextStep: async (elements, currentUrl) => {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = config.geminiApiKey;
       if (!apiKey) return fallback.decideNextStep(elements, currentUrl);
 
       const prompt = `You are an Autonomous Web QA Explorer.

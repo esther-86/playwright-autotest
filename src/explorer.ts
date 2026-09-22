@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { chromium } from 'playwright';
 import { getBrain } from './brain';
 import { extractInteractiveElements, getMainContentLocator, isInExplorationScope } from './observer/treeParser';
@@ -6,6 +5,7 @@ import { getUrlArchetype } from './observer/archetypes';
 import { invariantChecklist, InvariantContext } from './invariants';
 import { BugQueue, CandidateBugMetadata } from './queue/bugQueue';
 import { logger } from './utils/logger';
+import { config } from './config';
 
 export interface FlowPage {
   url: string;
@@ -15,10 +15,10 @@ export interface FlowPage {
 }
 
 async function runExplorer() {
-  const startUrl = process.env.TARGET_URL || 'https://academybugs.com/find-bugs/';
-  const maxDepth = parseInt(process.env.MAX_EXPLORATION_DEPTH || '2', 10);
-  const headless = process.env.HEADLESS !== 'false';
-  const timeBudgetSeconds = parseInt(process.env.EXPLORATION_TIME_SECONDS || '300', 10);
+  const startUrl = config.targetUrl;
+  const maxDepth = config.maxExplorationDepth;
+  const headless = config.headless;
+  const timeBudgetSeconds = config.explorationTimeSeconds;
   const timeBudgetMs = timeBudgetSeconds * 1000;
   const startTime = Date.now();
 
@@ -26,7 +26,7 @@ async function runExplorer() {
 
   logger.info('EXPLORER', 'Starting autonomous metamorphic QA explorer', {
     origin: startUrl,
-    provider: process.env.LLM_PROVIDER,
+    provider: config.llmProvider,
     timeBudget: `${timeBudgetSeconds}s`,
     maxDepth,
     availableInvariants: invariantChecklist.length,

@@ -7,7 +7,7 @@
     "test": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/runner.ts",
     "test:headed": "HEADLESS=false PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/runner.ts",
     "explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/explorer.ts",
-    "explore:headed": "HEADLESS=false PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/explorer.ts"
+    "tree:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/tree-explorer/index.ts"
   },
   "keywords": [
     "playwright",

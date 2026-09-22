@@ -1,10 +1,10 @@
-import 'dotenv/config';
 import { chromium } from 'playwright';
 import { invariantChecklist, InvariantContext } from './invariants';
+import { config } from './config';
 
 async function main() {
-  const targetUrl = process.env.TARGET_URL || 'https://academybugs.com/find-bugs/';
-  const headless = process.env.HEADLESS !== 'false';
+  const targetUrl = config.targetUrl;
+  const headless = config.headless;
 
   console.log('='.repeat(60));
   console.log('🚀 METAMORPHIC & INVARIANT WEB TEST RUNNER');
