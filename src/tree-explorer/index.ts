@@ -50,17 +50,55 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
     console.log(`Root state initialized (${rootFingerprint}). Discovered ${rootActions.length} initial actions:`);
     rootActions.forEach((a, i) => console.log(`  ${i + 1}. [${a.category}] ${a.description}`));
 
-    const rootNode: StateTreeNode = {
-      id: 'node-root',
-      depth: 0,
-      fingerprint: rootFingerprint,
-      url: config.targetUrl,
-      traceSoFar: [],
-      screenActions: rootActions,
-      unexploredActions: [...rootActions],
+    // State Tree tracking for synthesizing all discovered actions into journeys
+    interface TreeJourneyNode {
+      action?: DiscoveredAction;
+      children: TreeJourneyNode[];
+    }
+
+    function collectLeafJourneys(
+      node: TreeJourneyNode,
+      currentTrace: DiscoveredAction[] = []
+    ): DiscoveredAction[][] {
+      const nextTrace = node.action ? [...currentTrace, node.action] : currentTrace;
+      if (node.children.length === 0) {
+        return nextTrace.length > 0 ? [nextTrace] : [];
+      }
+      const result: DiscoveredAction[][] = [];
+      for (const child of node.children) {
+        result.push(...collectLeafJourneys(child, nextTrace));
+      }
+      return result;
+    }
+
+    const rootJourneyTree: TreeJourneyNode = {
+      children: rootActions.map((a) => ({ action: a, children: [] })),
     };
 
-    const stack: StateTreeNode[] = [rootNode];
+    interface StackNode {
+      id: string;
+      depth: number;
+      fingerprint: string;
+      url: string;
+      traceSoFar: DiscoveredAction[];
+      screenActions: DiscoveredAction[];
+      unexploredEntries: { action: DiscoveredAction; journeyNode: TreeJourneyNode }[];
+    }
+
+    const stack: StackNode[] = [
+      {
+        id: 'node-root',
+        depth: 0,
+        fingerprint: rootFingerprint,
+        url: config.targetUrl,
+        traceSoFar: [],
+        screenActions: rootActions,
+        unexploredEntries: rootActions.map((a, i) => ({
+          action: a,
+          journeyNode: rootJourneyTree.children[i],
+        })),
+      },
+    ];
 
     // 2. DFS Traversal Loop
     console.log('\n[Phase 2: Executing State-Tree Traversal]');
@@ -68,18 +106,17 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
       const currentNode = stack[stack.length - 1];
 
       // Termination Condition: Max depth or no actions left at this node
-      if (currentNode.unexploredActions.length === 0 || currentNode.depth >= config.maxExplorationDepth) {
+      if (currentNode.unexploredEntries.length === 0 || currentNode.depth >= config.maxExplorationDepth) {
         if (currentNode.traceSoFar.length > 0) {
-          completedJourneys.push(currentNode.traceSoFar);
           const flowSummary = currentNode.traceSoFar.map((s) => s.description).join(' ➔ ');
-          console.log(`\n✔ Completed Journey (${currentNode.traceSoFar.length} steps): ${flowSummary}`);
+          console.log(`\n✔ Completed Branch (${currentNode.traceSoFar.length} steps): ${flowSummary}`);
         }
         stack.pop();
         continue;
       }
 
       // Pick next unexplored action from current node
-      const action = currentNode.unexploredActions.shift()!;
+      const { action, journeyNode } = currentNode.unexploredEntries.shift()!;
       console.log(`\n▶ [Depth ${currentNode.depth + 1}] Exploring: "${action.description}"`);
 
       // Clean Backtracking: Replay trace up to this node in a fresh browser context
@@ -117,7 +154,7 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
         // 1. Functionally equivalent (e.g. in-place sort, filter, limit adjustments) OR
         // 2. A subset of parent screen affordances (e.g. dismissing a banner/overlay/dialog),
         // then the screen remains the same state (in-place interaction) without branching.
-        const parentActions = currentNode.screenActions || currentNode.unexploredActions;
+        const parentActions = currentNode.screenActions;
         const prevSig = parentActions.map((a) => `${a.category}:${a.actionType}`).sort().join(';');
         const nextSig = newActions.map((a) => `${a.category}:${a.actionType}`).sort().join(';');
         const controlsAreEquivalent = prevSig === nextSig && parentActions.length === newActions.length;
@@ -149,6 +186,9 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
         console.log(`  Discovered ${newActions.length} new actions in this state:`);
         newActions.forEach((a, i) => console.log(`  |_ ${i + 1}. [${a.category}] ${a.description}`));
 
+        // Attach newly discovered actions as children in the State Tree
+        journeyNode.children = newActions.map((a) => ({ action: a, children: [] }));
+
         // Push child state node onto stack to continue DFS
         stack.push({
           id: `node-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -157,7 +197,10 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
           url: currentUrl,
           traceSoFar: [...currentNode.traceSoFar, action],
           screenActions: newActions,
-          unexploredActions: newActions,
+          unexploredEntries: newActions.map((a, i) => ({
+            action: a,
+            journeyNode: journeyNode.children[i],
+          })),
         });
       } else if (transitioned && visitedFingerprints.has(nextFingerprint)) {
         console.log(`  🔄 State loop detected (${nextFingerprint}). Concluding branch.`);
@@ -174,19 +217,20 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
       console.log(`\n⏱ Exploration stopped: reached time budget of ${config.explorationTimeSeconds}s.`);
     }
 
-    // 3. Synthesize Standalone Test Suite
+    // 3. Synthesize Standalone Test Suite for All Discovered Leaf Journeys
     console.log('\n[Phase 3: Synthesizing Standalone Playwright Test Suite]');
-    const specContent = synthesizePlaywrightSuite(config.targetUrl, completedJourneys);
+    const allDiscoveredJourneys = collectLeafJourneys(rootJourneyTree);
+    const specContent = synthesizePlaywrightSuite(config.targetUrl, allDiscoveredJourneys);
 
-    const artifactsDir = path.resolve(__dirname, '../../artifacts');
+    const artifactsDir = path.resolve(process.cwd(), 'artifacts');
     fs.mkdirSync(artifactsDir, { recursive: true });
     const specPath = path.join(artifactsDir, 'state-tree-journeys.spec.ts');
     fs.writeFileSync(specPath, specContent, 'utf-8');
 
-    console.log(`\n🎉 Exploration complete! Synthesized ${completedJourneys.length} multi-step tests.`);
+    console.log(`\n🎉 Exploration complete! Synthesized ${allDiscoveredJourneys.length} multi-step tests.`);
     console.log(`📁 Test file written to: ${specPath}\n`);
 
-    return completedJourneys;
+    return allDiscoveredJourneys;
   } finally {
     await browser.close();
   }

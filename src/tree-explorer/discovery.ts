@@ -456,8 +456,8 @@ async function fallbackHeuristicDiscovery(
       description = `Click button "${item.accName || 'action'}"`;
       expectedInvariant = 'Triggers action state update';
       locator = item.accName
-        ? `button:visible:has-text("${item.accName}"), [role="button"]:visible:has-text("${item.accName}")`
-        : 'button:visible';
+        ? `button:visible:has-text("${item.accName}"), [role="button"]:visible:has-text("${item.accName}"), input[type="submit"][value="${item.accName}"]:visible, input[type="button"][value="${item.accName}"]:visible, input[value="${item.accName}"]:visible`
+        : 'button:visible, input[type="submit"]:visible, input[type="button"]:visible';
     } else {
       category = 'NAVIGATION';
       actionType = 'CLICK';
