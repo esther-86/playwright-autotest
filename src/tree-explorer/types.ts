@@ -23,6 +23,7 @@ export interface StateTreeNode {
   fingerprint: string;
   url: string;
   traceSoFar: DiscoveredAction[];
+  screenActions?: DiscoveredAction[];
   unexploredActions: DiscoveredAction[];
 }
 

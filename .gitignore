@@ -4,6 +4,5 @@ node_modules/
 logs/
 .venv/
 /queue/
-/tests/
 artifacts/
 .DS_Store

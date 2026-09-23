@@ -56,7 +56,8 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
       fingerprint: rootFingerprint,
       url: config.targetUrl,
       traceSoFar: [],
-      unexploredActions: rootActions,
+      screenActions: rootActions,
+      unexploredActions: [...rootActions],
     };
 
     const stack: StateTreeNode[] = [rootNode];
@@ -99,10 +100,45 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
 
       // If action caused a state transition and is not an already-visited state loop
       if (transitioned && !visitedFingerprints.has(nextFingerprint)) {
+        const currentUrl = page.url();
+        const currentPath = currentUrl.split('?')[0].replace(/\/+$/, '');
+        const parentPath = currentNode.url.split('?')[0].replace(/\/+$/, '');
+
+        // Breadth Discovery on the resulting screen
+        const newActions = await discoverScreenActions(
+          page,
+          config.maxBreadthPerScreen,
+          config.includeMenuHeaderFooter,
+          config.excludedUrlPatterns
+        );
+
+        // Generalized State Equivalence Rule:
+        // If the URL path is identical and the screen's interactive affordances are:
+        // 1. Functionally equivalent (e.g. in-place sort, filter, limit adjustments) OR
+        // 2. A subset of parent screen affordances (e.g. dismissing a banner/overlay/dialog),
+        // then the screen remains the same state (in-place interaction) without branching.
+        const parentActions = currentNode.screenActions || currentNode.unexploredActions;
+        const prevSig = parentActions.map((a) => `${a.category}:${a.actionType}`).sort().join(';');
+        const nextSig = newActions.map((a) => `${a.category}:${a.actionType}`).sort().join(';');
+        const controlsAreEquivalent = prevSig === nextSig && parentActions.length === newActions.length;
+
+        const parentActionKeys = new Set(
+          parentActions.map((a) => `${a.category}:${a.actionType}:${a.description}`)
+        );
+        const isSubsetOfParent =
+          newActions.length <= parentActions.length &&
+          newActions.every((na) => parentActionKeys.has(`${na.category}:${na.actionType}:${na.description}`));
+
+        if (currentPath === parentPath && (controlsAreEquivalent || isSubsetOfParent)) {
+          console.log(`  ℹ In-place interaction (no screen transition).`);
+          completedJourneys.push([...currentNode.traceSoFar, action]);
+          await context.close();
+          continue;
+        }
+
         visitedFingerprints.add(nextFingerprint);
         console.log(`  ✨ Transitioned to new state: ${nextFingerprint}`);
 
-        const currentUrl = page.url();
         if (isUrlExcluded(currentUrl, config.excludedUrlPatterns)) {
           console.log(`  ⛔ Excluded URL reached (${currentUrl}). Not expanding actions.`);
           completedJourneys.push([...currentNode.traceSoFar, action]);
@@ -110,14 +146,8 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
           continue;
         }
 
-        // Breadth Discovery on the new screen
-        const newActions = await discoverScreenActions(
-          page,
-          config.maxBreadthPerScreen,
-          config.includeMenuHeaderFooter,
-          config.excludedUrlPatterns
-        );
-        console.log(`  Discovered ${newActions.length} new actions in this state.`);
+        console.log(`  Discovered ${newActions.length} new actions in this state:`);
+        newActions.forEach((a, i) => console.log(`  |_ ${i + 1}. [${a.category}] ${a.description}`));
 
         // Push child state node onto stack to continue DFS
         stack.push({
@@ -126,6 +156,7 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
           fingerprint: nextFingerprint,
           url: currentUrl,
           traceSoFar: [...currentNode.traceSoFar, action],
+          screenActions: newActions,
           unexploredActions: newActions,
         });
       } else if (transitioned && visitedFingerprints.has(nextFingerprint)) {
