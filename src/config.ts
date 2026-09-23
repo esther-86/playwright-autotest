@@ -16,6 +16,10 @@ export interface AppConfig {
   invariantMode: 'SMART' | 'ALL';
   maxJourneysToTest: number;
   journeyTimeBudgetSeconds: number;
+  llmJudgeEnabled: boolean;
+  llmJudgeModel: string;
+  llmJudgeMinConfidence: number;
+  llmJudgeIncludeScreenshots: boolean;
 }
 
 /**
@@ -41,4 +45,11 @@ export const config: AppConfig = {
   invariantMode: ((process.env.INVARIANT_MODE || 'SMART').toUpperCase() === 'ALL' ? 'ALL' : 'SMART'),
   maxJourneysToTest: parseInt(process.env.MAX_JOURNEYS_TO_TEST || '0', 10),
   journeyTimeBudgetSeconds: parseInt(process.env.JOURNEY_TIME_BUDGET_SECONDS || '60', 10),
+  llmJudgeEnabled: process.env.LLM_JUDGE_ENABLED?.toLowerCase() === 'true',
+  llmJudgeModel: process.env.LLM_JUDGE_MODEL || '',
+  llmJudgeMinConfidence: Math.min(
+    1,
+    Math.max(0, parseFloat(process.env.LLM_JUDGE_MIN_CONFIDENCE || '0.8'))
+  ),
+  llmJudgeIncludeScreenshots: process.env.LLM_JUDGE_SCREENSHOTS?.toLowerCase() !== 'false',
 };

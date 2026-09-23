@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { timing } from '../timing';
 
 /**
  * Universal Financial / Cart Arithmetic Invariant:
@@ -19,8 +20,8 @@ export const cartArithmeticCheck: InvariantCheck = {
       '[class*="grand_total" i], [class*="grandtotal" i], [class*="order-total" i], tr:has-text("Total") td:not(:has-text("Subtotal")), td:has-text("Total") + td, [class*="total" i] strong'
     ).last();
 
-    if (!(await subtotalEl.isVisible({ timeout: 1500 }).catch(() => false)) ||
-        !(await grandTotalEl.isVisible({ timeout: 1500 }).catch(() => false))) {
+    if (!(await subtotalEl.isVisible({ timeout: timing.quickVisibilityMs }).catch(() => false)) ||
+        !(await grandTotalEl.isVisible({ timeout: timing.quickVisibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No financial pricing summary detected on this page.' };
     }
 

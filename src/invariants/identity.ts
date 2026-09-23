@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 export const identityCheck: InvariantCheck = {
   id: 'IDENTITY_ROUND_TRIP',
@@ -13,7 +14,7 @@ export const identityCheck: InvariantCheck = {
       'role=searchbox, input[type="search"], input[name="q"], input[placeholder*="search" i], input[name*="search" i], input[id*="search" i]'
     ).first();
 
-    if (!(await searchBox.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await searchBox.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No search input found on this page.' };
     }
 
@@ -21,7 +22,7 @@ export const identityCheck: InvariantCheck = {
 
     await searchBox.fill(seed);
     await searchBox.press('Enter');
-    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+    await settlePage(page, timing.evidenceMs);
 
     const bodyText = await page.innerText('body').catch(() => '');
     const found = bodyText.toLowerCase().includes(seed.toLowerCase());

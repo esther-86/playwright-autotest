@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * Universal Page Size Upper Bound Invariant:
@@ -15,14 +16,13 @@ export const perPageLimitCheck: InvariantCheck = {
     const limitSelector = context.targetSelector || `[class*="perpage" i] a, [class*="limit" i] a, a:has-text("${targetLimit}")`;
     const perPageBtn = page.locator(limitSelector).first();
 
-    if (!(await perPageBtn.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await perPageBtn.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No per-page cardinality controls found on this page.' };
     }
 
     // Click the limit option
     await perPageBtn.click();
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    await settlePage(page);
 
     // Count visible collection items
     const itemCardSelector = '[role="article"], [role="listitem"], [role="row"], .card, [class*="product" i]';
@@ -47,7 +47,7 @@ export const perPageLimitCheck: InvariantCheck = {
           ],
           specSnippet: `const perPage = page.locator('${limitSelector}').first();
 await perPage.click();
-await page.waitForTimeout(1000);
+await page.waitForLoadState('networkidle');
 const count = await page.locator('${itemCardSelector}').count();
 expect(count).toBeLessThanOrEqual(${targetLimit});`
         },

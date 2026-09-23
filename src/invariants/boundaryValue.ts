@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * Boundary Value Analysis (BVA) Invariant:
@@ -13,11 +14,11 @@ export const boundaryValueCheck: InvariantCheck = {
     // 1. Find a numeric or quantity input (common in carts and filters)
     const numberInput = page.locator('input[type="number"], input[name*="quantity" i], input[id*="quantity" i]').first();
 
-    if (await numberInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await numberInput.isVisible({ timeout: timing.visibilityMs }).catch(() => false)) {
       // Test A: Negative value (-1)
       await numberInput.fill('-1');
       await numberInput.press('Enter').catch(() => {});
-      await page.waitForTimeout(500);
+      await settlePage(page);
 
       const val = await numberInput.inputValue();
       if (val === '-1') {
@@ -35,12 +36,12 @@ export const boundaryValueCheck: InvariantCheck = {
       // Test B: Zero value (0)
       await numberInput.fill('0');
       await numberInput.press('Enter').catch(() => {});
-      await page.waitForTimeout(500);
+      await settlePage(page);
 
       // Test C: Extreme Overflow (99999999)
       await numberInput.fill('99999999');
       await numberInput.press('Enter').catch(() => {});
-      await page.waitForTimeout(500);
+      await settlePage(page);
 
       const overflowBody = await page.innerText('body');
       if (overflowBody.includes('500') || overflowBody.includes('Internal Server Error')) {
@@ -60,11 +61,11 @@ export const boundaryValueCheck: InvariantCheck = {
 
     // 2. Fallback: Test text input overflow (1,000 characters)
     const textInput = page.locator('input[type="text"], textarea').first();
-    if (await textInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await textInput.isVisible({ timeout: timing.visibilityMs }).catch(() => false)) {
       const hugeString = 'QA_OVERFLOW_'.repeat(100);
       await textInput.fill(hugeString);
       await textInput.press('Enter').catch(() => {});
-      await page.waitForTimeout(500);
+      await settlePage(page);
 
       const textBody = await page.innerText('body');
       if (textBody.includes('500') || textBody.includes('Internal Server Error')) {

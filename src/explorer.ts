@@ -6,6 +6,7 @@ import { invariantChecklist, InvariantContext } from './invariants';
 import { BugQueue, CandidateBugMetadata } from './queue/bugQueue';
 import { logger } from './utils/logger';
 import { config } from './config';
+import { settlePage, timing } from './timing';
 
 export interface FlowPage {
   url: string;
@@ -97,8 +98,8 @@ async function runExplorer() {
       );
 
       try {
-        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
-        await page.waitForTimeout(1000);
+        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: timing.explorerNavigationMs });
+        await settlePage(page);
       } catch (err: any) {
         logger.warn('NAVIGATE', `Failed loading ${currentUrl}: ${err.message}`);
         continue;
@@ -110,7 +111,7 @@ async function runExplorer() {
       ).first();
       if (await cookieBtn.isVisible().catch(() => false)) {
         await cookieBtn.click().catch(() => {});
-        await page.waitForTimeout(500);
+        await settlePage(page);
       }
 
       const mainContent = getMainContentLocator(page);
@@ -184,7 +185,7 @@ async function runExplorer() {
             const crashOverlay = page.locator('[class*="crash" i]');
             if ((await crashOverlay.isVisible().catch(() => false)) || page.url() !== currentUrl) {
               await page.goto(currentUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-              await page.waitForTimeout(500);
+              await settlePage(page);
             }
 
             if (res.status === 'FAIL') {

@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { invariantChecklist, InvariantContext } from './invariants';
 import { config } from './config';
+import { settlePage } from './timing';
 
 async function main() {
   const targetUrl = config.targetUrl;
@@ -46,7 +47,7 @@ async function main() {
     });
 
     await harvestPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-    await harvestPage.waitForTimeout(2000);
+    await settlePage(harvestPage);
 
     // Fallback: Sniff visible headings / product titles from DOM
     if (harvestedSeeds.length === 0) {
@@ -92,7 +93,7 @@ async function main() {
 
       try {
         await isolatedPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-        await isolatedPage.waitForTimeout(1000);
+        await settlePage(isolatedPage);
 
         const rawRes = await check.run(isolatedPage, invContext);
         const checkResults = Array.isArray(rawRes) ? rawRes : [rawRes];

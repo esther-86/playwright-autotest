@@ -1,15 +1,16 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { observeFor, timing } from '../timing';
 
 /**
  * Universal Asynchronous Response Finality Invariant:
  * Any asynchronous operation, view loading state, spinner, or skeleton indicator
- * must resolve to a settled state within a reasonable upper latency bound (< 3500ms).
+ * must resolve within the centrally configured async observation bound.
  * Indefinite or unresolving spinners indicate unhandled promise hangs or broken network state.
  */
 export const responseFinalityCheck: InvariantCheck = {
   id: 'ASYNC_RESPONSE_FINALITY',
   name: 'Asynchronous Response Finality & Latency Invariant',
-  description: 'Loaders, spinners, and progress indicators must resolve within 3500ms without indefinite hangs.',
+  description: `Loaders, spinners, and progress indicators must resolve within ${timing.asyncObservationMs}ms without indefinite hangs.`,
   run: async (page): Promise<InvariantResult | InvariantResult[]> => {
     const results: InvariantResult[] = [];
 
@@ -21,7 +22,7 @@ export const responseFinalityCheck: InvariantCheck = {
     };
 
     // 1. Check initial page load state
-    await page.waitForTimeout(3000);
+    await observeFor(page, timing.networkIdleMs);
     const initialSpinners = await findActiveSpinners();
     const count = await initialSpinners.count().catch(() => 0);
 
@@ -35,7 +36,7 @@ export const responseFinalityCheck: InvariantCheck = {
           results.push({
             passed: false,
             status: 'FAIL',
-            message: `Asynchronous finality violation: Loading indicator inside "${containerDesc}" persists beyond 3000ms!`,
+            message: `Asynchronous finality violation: Loading indicator inside "${containerDesc}" persists beyond ${timing.networkIdleMs}ms!`,
             details: {
               title: `Permanent Loading Spinner in ${containerDesc}`,
               expected: 'Async data resolution should complete and dismiss spinner within 3 seconds.',
@@ -43,11 +44,10 @@ export const responseFinalityCheck: InvariantCheck = {
               severity: 'HIGH',
               reproductionSteps: [
                 `Navigate to ${page.url()}`,
-                'Wait 3000ms for asynchronous requests to settle',
+                `Wait ${timing.networkIdleMs}ms for asynchronous requests to settle`,
                 'Observe loading indicator remains visible'
               ],
               specSnippet: `await page.goto('${page.url()}');
-await page.waitForTimeout(3500);
 await expect(page.locator('[class*="spinner" i]:visible')).toHaveCount(0);`
             },
           });
@@ -64,7 +64,7 @@ await expect(page.locator('[class*="spinner" i]:visible')).toHaveCount(0);`
     for (const trigger of asyncTriggers.slice(0, 2)) {
       if (await trigger.isVisible().catch(() => false)) {
         await trigger.click().catch(() => {});
-        await page.waitForTimeout(3500);
+        await observeFor(page, timing.asyncObservationMs);
 
         const postClickSpinners = await findActiveSpinners();
         if (await postClickSpinners.count() > 0) {
@@ -72,7 +72,7 @@ await expect(page.locator('[class*="spinner" i]:visible')).toHaveCount(0);`
           results.push({
             passed: false,
             status: 'FAIL',
-            message: `Async action "${triggerText}" initiated a loading state that failed to resolve within 3500ms!`,
+            message: `Async action "${triggerText}" initiated a loading state that failed to resolve within ${timing.asyncObservationMs}ms!`,
             details: {
               title: `Action "${triggerText}" Hangs in Permanent Loading State`,
               expected: 'Clicking action initiates request and settles within 3.5s.',
@@ -85,7 +85,6 @@ await expect(page.locator('[class*="spinner" i]:visible')).toHaveCount(0);`
               ],
               specSnippet: `const trigger = page.locator(':has-text("${triggerText.replace(/"/g, '')}")').first();
 await trigger.click();
-await page.waitForTimeout(3500);
 await expect(page.locator('[class*="spinner" i]:visible')).toHaveCount(0);`
             },
           });

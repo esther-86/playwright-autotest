@@ -53,6 +53,56 @@ Streams internal reasoning and tool calls in real time using the official SDK:
 npm run agent:stream
 ```
 
+### Option D: Judge Every Journey Action with an LLM
+
+Stage 2 can capture the page before and after every discovered action and ask a
+multimodal model for a conservative, evidence-backed bug assessment. Configure
+the switch and provider in `.env`:
+
+```bash
+LLM_JUDGE_ENABLED=true
+LLM_PROVIDER=gemini
+LLM_JUDGE_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=your-key
+LLM_JUDGE_MIN_CONFIDENCE=0.8
+LLM_JUDGE_SCREENSHOTS=true
+```
+
+OpenAI and local Ollama are also supported:
+
+```bash
+# Hosted OpenAI
+LLM_PROVIDER=openai
+LLM_JUDGE_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=your-key
+
+# Or local Ollama with a vision-capable model
+LLM_PROVIDER=ollama
+LLM_JUDGE_MODEL=llava
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
+Then run both stages:
+
+```bash
+npm run url:explore
+npm run journeys:explore
+```
+
+Set `LLM_JUDGE_ENABLED=false` to use deterministic invariant checks only. LLM
+findings are deliberately labeled as candidates and packaged with the existing
+Playwright trace and reproduction artifacts.
+
+Each assessment also receives action-scoped network evidence for documents,
+XHR, fetch, WebSocket/EventSource traffic, HTTP error responses, and transport
+failures. Credentials and query-string values are removed before URLs are sent
+to the model. Unrelated telemetry failures are explicitly excluded from the
+bug criteria.
+
+All explicit browser time bounds are configured in `config/timing.json` and
+consumed through `src/timing.ts`; runtime code should not contain numeric
+Playwright timeouts or direct fixed sleeps.
+
 ---
 
 ## 📌 Short Summary: How It Works

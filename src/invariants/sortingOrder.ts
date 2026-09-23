@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * Universal Bidirectional Sorting Monotonicity Invariant:
@@ -13,7 +14,7 @@ export const sortingOrderCheck: InvariantCheck = {
     const sortSelector = context.targetSelector || 'select[name*="sort" i], select[id*="sort" i], select[class*="sort" i], [aria-label*="sort" i]';
     const sortSelect = page.locator(sortSelector).first();
 
-    if (!(await sortSelect.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await sortSelect.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No standard sort dropdown found on this page.' };
     }
 
@@ -36,7 +37,7 @@ export const sortingOrderCheck: InvariantCheck = {
         const val = (await ascOption.getAttribute('value')) || '';
         const selected = await sortSelect.selectOption(val);
         if (selected.length > 0) {
-          await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+          await settlePage(page);
           const ascValues = await extractNumbers();
 
           if (ascValues.length > 1) {
@@ -59,7 +60,7 @@ export const sortingOrderCheck: InvariantCheck = {
                     ],
                     specSnippet: `const sort = page.locator('${sortSelector}').first();
 await sort.selectOption({ label: 'Price: Low to High' });
-await page.waitForTimeout(1000);`
+await page.waitForLoadState('networkidle');`
                   }
                 };
               }
@@ -78,7 +79,7 @@ await page.waitForTimeout(1000);`
         const val = (await descOption.getAttribute('value')) || '';
         const selected = await sortSelect.selectOption(val);
         if (selected.length > 0) {
-          await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+          await settlePage(page);
           const descValues = await extractNumbers();
 
           if (descValues.length > 1) {
@@ -101,7 +102,7 @@ await page.waitForTimeout(1000);`
                     ],
                     specSnippet: `const sort = page.locator('${sortSelector}').first();
 await sort.selectOption({ label: 'Price: High to Low' });
-await page.waitForTimeout(1500);
+await page.waitForLoadState('networkidle');
 const prices = await page.locator('[class*="price" i]').allInnerTexts();
 const parsed = prices.map(p => parseFloat(p.replace(/[^0-9.]/g, ''))).filter(n => !isNaN(n));
 expect(parsed[${i}]).toBeGreaterThanOrEqual(parsed[${i + 1}]);`

@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * Universal Filter Monotonicity & Reversibility Invariant:
@@ -28,12 +29,12 @@ export const filterMonotonicityCheck: InvariantCheck = {
 
     const initialCount = await getItemCount();
 
-    if (await filterCtrl.isVisible({ timeout: 1500 }).catch(() => false)) {
+    if (await filterCtrl.isVisible({ timeout: timing.quickVisibilityMs }).catch(() => false)) {
       const isCheckbox = await filterCtrl.evaluate((el: HTMLElement) => el.tagName.toLowerCase() === 'input');
 
       if (isCheckbox) {
         await filterCtrl.check();
-        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        await settlePage(page);
         const filteredCount = await getItemCount();
 
         if (filteredCount > initialCount) {
@@ -53,7 +54,7 @@ export const filterMonotonicityCheck: InvariantCheck = {
               ],
               specSnippet: `const initial = await page.locator('[role="article"], .card').count();
 await page.locator('${filterSelector}').first().check();
-await page.waitForTimeout(1000);
+await page.waitForLoadState('networkidle');
 const filtered = await page.locator('[role="article"], .card').count();
 expect(filtered).toBeLessThanOrEqual(initial);`
             }
@@ -61,7 +62,7 @@ expect(filtered).toBeLessThanOrEqual(initial);`
         }
 
         await filterCtrl.uncheck();
-        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        await settlePage(page);
         const restoredCount = await getItemCount();
 
         if (restoredCount !== initialCount) {
@@ -75,8 +76,7 @@ expect(filtered).toBeLessThanOrEqual(initial);`
         // Link-based facet
         const initialUrl = page.url();
         await filterCtrl.click();
-        await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
-        await page.waitForTimeout(1000);
+        await settlePage(page);
 
         const filteredCount = await getItemCount();
         const newUrl = page.url();

@@ -1,6 +1,7 @@
 import { Browser, BrowserContext, Page } from 'playwright';
 import { DiscoveredAction } from './types';
 import { computeStateFingerprint } from './fingerprint';
+import { settlePage, timing } from '../timing';
 
 /**
  * Replays a sequence of actions in a fresh, isolated browser context.
@@ -20,7 +21,7 @@ export async function replayTrace(
   // Replay actions cleanly with auto-waiting
   for (const step of trace) {
     const locator = page.locator(step.locator).first();
-    await locator.waitFor({ state: 'visible', timeout: 5000 });
+    await locator.waitFor({ state: 'visible', timeout: timing.actionMs });
 
     if (step.actionType === 'CLICK') {
       await locator.click();
@@ -49,7 +50,7 @@ export async function executeDepthStep(
 ): Promise<{ nextFingerprint: string; transitioned: boolean; error?: string }> {
   try {
     const locator = page.locator(action.locator).first();
-    await locator.waitFor({ state: 'visible', timeout: 5000 });
+    await locator.waitFor({ state: 'visible', timeout: timing.actionMs });
 
     if (action.actionType === 'CLICK') {
       await locator.click();
@@ -62,8 +63,7 @@ export async function executeDepthStep(
     }
 
     // Wait for DOM or navigation reaction
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+    await settlePage(page);
 
     const nextFingerprint = await computeStateFingerprint(page);
     const transitioned = nextFingerprint !== previousFingerprint;

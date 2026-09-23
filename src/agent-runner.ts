@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { logger } from './utils/logger';
 import { config } from './config';
+import { settlePage, timing } from './timing';
 
 /**
  * Lean Browser Driver for AI Agents (Under 45 lines).
@@ -16,7 +17,7 @@ export async function launchPage(url?: string) {
   const page = await context.newPage();
 
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(1000);
+  await settlePage(page);
 
   return { browser, context, page, targetUrl };
 }
@@ -26,7 +27,7 @@ if (require.main === module) {
   (async () => {
     const { browser, page, targetUrl } = await launchPage();
     const title = await page.title();
-    const aria = await page.locator('body').ariaSnapshot({ timeout: 2000 }).catch(() => '');
+    const aria = await page.locator('body').ariaSnapshot({ timeout: timing.visibilityMs }).catch(() => '');
 
     logger.info('INSPECTOR', `Ready: "${title}"`, {
       url: targetUrl,

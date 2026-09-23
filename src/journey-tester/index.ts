@@ -6,6 +6,14 @@ import { config, AppConfig } from '../config';
 import { invariantChecklist, InvariantCheck, InvariantContext, InvariantResult } from '../invariants';
 import { BugQueue, CandidateBugMetadata } from '../queue/bugQueue';
 import { DiscoveredAction } from '../tree-explorer/types';
+import {
+  capturePageEvidence,
+  createLLMJudge,
+  createNetworkRecorder,
+  executeSafeProbes,
+  sanitizeNetworkUrl,
+} from '../llm-judge';
+import { settlePage, timing } from '../timing';
 
 /**
  * Stage 2: Autonomous Journey Invariant Explorer
@@ -29,7 +37,16 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
   console.log(`⚙ Invariant Mode:        ${appConfig.invariantMode}`);
   console.log(`⏱ Time Budget:          ${appConfig.journeyTimeBudgetSeconds}s`);
   console.log(`🕶 Headless:             ${appConfig.headless}`);
+  const llmJudge = createLLMJudge(appConfig);
+  console.log(`🧠 LLM Judge:            ${llmJudge.available ? `ON — ${llmJudge.providerName}` : 'OFF'}`);
   console.log('='.repeat(65));
+
+  if (appConfig.llmJudgeEnabled && !llmJudge.available) {
+    console.warn(
+      `⚠ LLM_JUDGE_ENABLED=true, but provider "${appConfig.llmProvider}" has no usable judge configuration. ` +
+      'Continuing with deterministic checks.'
+    );
+  }
 
   // 1. Prerequisite Check: Ensure Stage 1 has run
   if (!fs.existsSync(specPath) && !fs.existsSync(jsonPath)) {
@@ -84,6 +101,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
       // Start Playwright action tracing for artifact capture
       await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
       const page = await context.newPage();
+      const networkRecorder = createNetworkRecorder(page);
 
       const consoleErrors: string[] = [];
       const failedRequests: Array<{ url: string; status: number }> = [];
@@ -98,21 +116,41 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
       });
       page.on('response', (resp) => {
         if (resp.status() >= 400 && !resp.url().includes('favicon') && !resp.url().includes('.png')) {
-          failedRequests.push({ url: resp.url(), status: resp.status() });
+          failedRequests.push({ url: sanitizeNetworkUrl(resp.url()), status: resp.status() });
         }
+      });
+      page.on('requestfailed', (request) => {
+        failedRequests.push({ url: sanitizeNetworkUrl(request.url()), status: 0 });
       });
 
       let executionError: string | null = null;
       const completedSteps: string[] = [];
+      let llmBugMeta: Omit<CandidateBugMetadata, 'id' | 'createdAt'> | null = null;
 
       try {
-        await page.goto(appConfig.targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.goto(appConfig.targetUrl, { waitUntil: 'domcontentloaded', timeout: timing.navigationMs });
         completedSteps.push(`Navigate to ${appConfig.targetUrl}`);
 
         for (let sIdx = 0; sIdx < journey.length; sIdx++) {
           const step = journey[sIdx];
+          const errorsBeforeStep = consoleErrors.length;
+          const requestsBeforeStep = failedRequests.length;
+          const beforeEvidence = llmJudge.isOperational()
+            ? await capturePageEvidence(page, appConfig.llmJudgeIncludeScreenshots)
+            : null;
+          const expectations = beforeEvidence
+            ? await llmJudge.generateExpectations(step, beforeEvidence).catch((error: any) => {
+                console.warn(`  ⚠ LLM expectation generation failed: ${error.message}`);
+                return [];
+              })
+            : [];
+
+          // The mark is taken immediately before dispatch so only network work
+          // causally associated with this action is presented to the judge.
+          const networkMark = networkRecorder.mark();
+
           const locator = page.locator(step.locator).first();
-          await locator.waitFor({ state: 'visible', timeout: 5000 });
+          await locator.waitFor({ state: 'visible', timeout: timing.actionMs });
 
           if (step.actionType === 'CLICK') {
             await locator.click();
@@ -124,9 +162,61 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
             await locator.fill(step.value || 'test');
           }
 
-          await page.waitForLoadState('domcontentloaded');
-          await page.waitForTimeout(500);
+          await settlePage(page);
           completedSteps.push(`Step ${sIdx + 1}: ${step.description}`);
+
+          if (beforeEvidence && llmJudge.isOperational()) {
+            const afterEvidence = await capturePageEvidence(page, appConfig.llmJudgeIncludeScreenshots);
+            const judgeInput = {
+              action: step,
+              expectations,
+              before: beforeEvidence,
+              after: afterEvidence,
+              consoleErrors: consoleErrors.slice(errorsBeforeStep),
+              failedRequests: failedRequests.slice(requestsBeforeStep),
+              networkEvents: networkRecorder.since(networkMark),
+            };
+
+            let assessment = await llmJudge.assess(judgeInput).catch((error: any) => {
+              console.warn(`  ⚠ LLM outcome assessment failed: ${error.message}`);
+              return null;
+            });
+
+            if (assessment?.verdict === 'NEEDS_PROBE' && assessment.additionalProbes.length > 0) {
+              const probeResults = await executeSafeProbes(page, assessment.additionalProbes);
+              assessment = await llmJudge.assess({ ...judgeInput, probeResults }).catch((error: any) => {
+                console.warn(`  ⚠ LLM probe reassessment failed: ${error.message}`);
+                return assessment;
+              });
+            }
+
+            if (assessment) {
+              console.log(
+                `  🧠 Step ${sIdx + 1}: ${assessment.verdict} ` +
+                `(confidence ${assessment.confidence.toFixed(2)}) — ${assessment.title}`
+              );
+            }
+
+            if (
+              assessment?.verdict === 'SUSPICIOUS' &&
+              assessment.confidence >= appConfig.llmJudgeMinConfidence &&
+              !llmBugMeta
+            ) {
+              llmBugMeta = {
+                targetUrl: afterEvidence.url,
+                title: `[LLM ${assessment.category || 'FUNCTIONAL'} Candidate] ${assessment.title}`,
+                invariantId: `LLM_${assessment.category || 'FUNCTIONAL'}_JUDGE`,
+                severity: assessment.category === 'VISUAL' || assessment.category === 'CONTENT' ? 'LOW' : 'MEDIUM',
+                expected: assessment.expected,
+                actual: [assessment.observed, ...assessment.evidence].filter(Boolean).join('\n- '),
+                reproductionSteps: [...completedSteps],
+                consoleErrors: [...consoleErrors],
+                failedRequests: [...failedRequests],
+                networkEvents: networkRecorder.since(networkMark),
+                specSnippet: generateReproSnippet(journey.slice(0, sIdx + 1)),
+              };
+            }
+          }
         }
       } catch (err: any) {
         executionError = err.message;
@@ -151,6 +241,8 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
           failedRequests: [...failedRequests],
           specSnippet: generateReproSnippet(journey),
         };
+      } else if (llmBugMeta) {
+        bugMeta = llmBugMeta;
       } else {
         // Invariant Evaluation
         const invariantsToRun = selectInvariantsForScreen(
@@ -232,6 +324,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
         console.log(`  ✔ Journey passed all invariants`);
       }
 
+      networkRecorder.stop();
       await context.close();
     }
 

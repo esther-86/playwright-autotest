@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 export const canaryCheck: InvariantCheck = {
   id: 'CANARY_ZERO_STATE',
@@ -12,7 +13,7 @@ export const canaryCheck: InvariantCheck = {
       'role=searchbox, input[type="search"], input[name="q"], input[placeholder*="search" i], input[name*="search" i], input[id*="search" i]'
     ).first();
 
-    if (!(await searchBox.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await searchBox.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No search input found on this page.' };
     }
 
@@ -26,7 +27,7 @@ export const canaryCheck: InvariantCheck = {
     try {
       await searchBox.fill(garbageUuid);
       await searchBox.press('Enter');
-      await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+      await settlePage(page, timing.evidenceMs);
 
       const bodyText = await page.innerText('body').catch(() => '');
 

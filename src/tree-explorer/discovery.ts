@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { DiscoveredAction } from './types';
 import { config } from '../config';
+import { timing } from '../timing';
 
 /**
  * Checks whether a URL, pathname, or title matches any excluded URL pattern.
@@ -36,7 +37,7 @@ export async function discoverScreenActions(
     ariaSnapshot = await page
       .locator('main, [role="main"], #main-content, body')
       .first()
-      .ariaSnapshot({ timeout: 4000 });
+      .ariaSnapshot({ timeout: timing.evidenceMs });
   } catch {
     ariaSnapshot = '';
   }
@@ -473,7 +474,6 @@ async function fallbackHeuristicDiscovery(
       category,
       locator,
       actionType,
-      value: actionType === 'SELECT' ? '1' : undefined,
       description,
       expectedInvariant,
     });

@@ -1,5 +1,6 @@
 import { Locator, Page } from 'playwright';
 import { PageElement } from '../brain/types';
+import { timing } from '../timing';
 
 export const BLOCKED_ANCESTORS = [
   'header',
@@ -61,7 +62,7 @@ export async function extractInteractiveElements(page: Page): Promise<PageElemen
 
   // 1. Playwright modern ARIA Snapshot scoped to main content
   try {
-    const rawSnapshot = await rootLocator.ariaSnapshot({ timeout: 3000 });
+    const rawSnapshot = await rootLocator.ariaSnapshot({ timeout: timing.networkIdleMs });
     const lines = rawSnapshot.split('\n');
 
     for (const line of lines) {
@@ -131,4 +132,3 @@ export async function extractInteractiveElements(page: Page): Promise<PageElemen
 
   return interactive;
 }
-

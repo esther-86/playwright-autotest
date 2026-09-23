@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { observeFor, settlePage, timing } from '../timing';
 
 /**
  * Universal UI Thread Liveness & Crash Overlay Guard:
@@ -20,7 +21,7 @@ export const uiThreadLivenessCheck: InvariantCheck = {
         '[class*="crash" i], [class*="freeze" i], [id*="crash" i], [class*="overlay"][class*="bug" i]'
       ).first();
 
-      if (await overlay.isVisible({ timeout: 800 }).catch(() => false)) {
+      if (await overlay.isVisible({ timeout: timing.overlayCheckMs }).catch(() => false)) {
         const text = await overlay.innerText().catch(() => 'Crash Overlay Displayed');
         return text.trim() || 'Interactive crash overlay detected';
       }
@@ -29,7 +30,7 @@ export const uiThreadLivenessCheck: InvariantCheck = {
 
     const recoverView = async () => {
       await page.goto(currentUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-      await page.waitForTimeout(500);
+      await settlePage(page);
     };
 
     // 1. Probe comboboxes / select dropdowns on the page
@@ -38,7 +39,7 @@ export const uiThreadLivenessCheck: InvariantCheck = {
       const optionCount = await sel.locator('option').count().catch(() => 0);
       if (optionCount > 1) {
         await sel.selectOption({ index: 1 }).catch(() => {});
-        await page.waitForTimeout(1000);
+        await observeFor(page, timing.normalObservationMs);
 
         const crashMsg = await isCrashOrFreezeOverlayActive();
         if (crashMsg) {
@@ -59,7 +60,7 @@ export const uiThreadLivenessCheck: InvariantCheck = {
               consoleErrors: [crashMsg],
               specSnippet: `const select = page.locator('select').first();
 await select.selectOption({ index: 1 });
-await page.waitForTimeout(1000);
+await page.waitForLoadState('networkidle');
 await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
             },
           });
@@ -77,13 +78,13 @@ await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
     for (const ctrl of variantControls.slice(0, 4)) {
       if (await ctrl.isVisible().catch(() => false)) {
         await ctrl.click().catch(() => {});
-        await page.waitForTimeout(600);
+        await observeFor(page, timing.shortObservationMs);
 
         // Also test immediate child increment or action if present
         const plusBtn = page.locator('[class*="plus" i], [aria-label*="increase" i], [aria-label*="increment" i]').first();
         if (await plusBtn.isVisible().catch(() => false)) {
           await plusBtn.click().catch(() => {});
-          await page.waitForTimeout(800);
+          await observeFor(page, timing.overlayCheckMs);
         }
 
         const crashMsg = await isCrashOrFreezeOverlayActive();
@@ -129,7 +130,7 @@ await expect(page.locator('[class*="crash" i]')).not.toBeVisible();`
         }
 
         await submitBtn.click().catch(() => {});
-        await page.waitForTimeout(1500);
+        await observeFor(page, timing.quickVisibilityMs);
 
         const crashMsg = await isCrashOrFreezeOverlayActive();
         if (crashMsg) {

@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { timing } from '../timing';
 
 /**
  * Universal Hyperlink Reachability Invariant:
@@ -26,7 +27,7 @@ export const brokenLinkReachabilityCheck: InvariantCheck = {
 
       try {
         const fullUrl = new URL(href, page.url()).href;
-        const response = await page.request.get(fullUrl, { failOnStatusCode: false, timeout: 4000 });
+        const response = await page.request.get(fullUrl, { failOnStatusCode: false, timeout: timing.requestMs });
         const status = response.status();
 
         if (status >= 400) {

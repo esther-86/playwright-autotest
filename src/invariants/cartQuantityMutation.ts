@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * Universal Mutation Persistence Invariant:
@@ -15,7 +16,7 @@ export const cartQuantityMutationCheck: InvariantCheck = {
     const qtySelector = context.targetSelector || 'input[name*="quantity" i], input[type="number"], input[class*="quantity" i]';
     const qtyInput = page.locator(qtySelector).first();
 
-    if (!(await qtyInput.isVisible({ timeout: 1500 }).catch(() => false))) {
+    if (!(await qtyInput.isVisible({ timeout: timing.quickVisibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No editable numeric counter input found on this view.' };
     }
 
@@ -28,13 +29,12 @@ export const cartQuantityMutationCheck: InvariantCheck = {
     ).first();
 
     await qtyInput.fill(testTargetVal);
-    if (await updateBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (await updateBtn.isVisible({ timeout: timing.normalObservationMs }).catch(() => false)) {
       await updateBtn.click();
-      await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
-      await page.waitForTimeout(1000);
+      await settlePage(page);
     } else {
       await qtyInput.press('Enter');
-      await page.waitForTimeout(1000);
+      await settlePage(page);
     }
 
     const updatedVal = (await qtyInput.inputValue().catch(() => '')).trim();
@@ -61,7 +61,7 @@ export const cartQuantityMutationCheck: InvariantCheck = {
 await input.fill('${testTargetVal}');
 const btn = page.locator('button:has-text("Update"), input[value*="Update" i]').first();
 if (await btn.isVisible()) await btn.click();
-await page.waitForTimeout(1000);
+await page.waitForLoadState('networkidle');
 expect(await input.inputValue()).toBe('${testTargetVal}');`
         },
       };

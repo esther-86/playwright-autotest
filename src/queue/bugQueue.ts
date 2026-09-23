@@ -14,6 +14,15 @@ export interface CandidateBugMetadata {
   specSnippet?: string;
   consoleErrors?: string[];
   failedRequests?: Array<{ url: string; status: number }>;
+  networkEvents?: Array<{
+    kind: 'RESPONSE' | 'REQUEST_FAILED';
+    method: string;
+    url: string;
+    resourceType: string;
+    status?: number;
+    failure?: string;
+    durationMs?: number;
+  }>;
 }
 
 let bugsDirectory = path.resolve(process.cwd(), 'artifacts', 'bugs');
@@ -86,6 +95,7 @@ test('${meta.title}', async ({ page }) => {
 - **Trace Archive:** \`trace.zip\`
 - **Console Errors:** ${meta.consoleErrors?.length || 0}
 - **Failed HTTP Requests:** ${meta.failedRequests?.length || 0}
+- **Action-correlated Network Events:** ${meta.networkEvents?.length || 0}
 `;
   }
 

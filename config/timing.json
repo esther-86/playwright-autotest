@@ -1,0 +1,16 @@
+{
+  "overlayCheckMs": 800,
+  "quickVisibilityMs": 1500,
+  "visibilityMs": 2000,
+  "actionMs": 5000,
+  "navigationMs": 15000,
+  "explorerNavigationMs": 12000,
+  "evidenceMs": 4000,
+  "networkIdleMs": 3000,
+  "requestMs": 4000,
+  "reloadMs": 10000,
+  "shortObservationMs": 500,
+  "normalObservationMs": 1000,
+  "seedObservationMs": 2000,
+  "asyncObservationMs": 3500
+}

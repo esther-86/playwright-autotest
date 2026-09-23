@@ -1,4 +1,5 @@
 import { InvariantCheck, InvariantResult } from './types';
+import { settlePage, timing } from '../timing';
 
 /**
  * State Transition & CRUD Invariant:
@@ -17,26 +18,25 @@ export const cartTransitionCheck: InvariantCheck = {
       'a:has-text("ADD TO CART"), button:has-text("ADD TO CART"), [aria-label*="add to cart" i], [class*="add_to_cart" i]'
     ).first();
 
-    if (!(await addToCartBtn.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await addToCartBtn.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'No "Add to Cart" button found on this page.' };
     }
 
     // 2. Click "Add to Cart"
     await addToCartBtn.click();
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-    await page.waitForTimeout(1000);
+    await settlePage(page);
 
     // 3. Navigate to Cart view
     const viewCartLink = page.locator(
       'a:has-text("View Cart"), a:has-text("Cart"), a[href*="cart" i], [aria-label*="cart" i]'
     ).first();
 
-    if (!(await viewCartLink.isVisible({ timeout: 2000 }).catch(() => false))) {
+    if (!(await viewCartLink.isVisible({ timeout: timing.visibilityMs }).catch(() => false))) {
       return { passed: true, status: 'SKIPPED', message: 'Item added, but could not locate Cart navigation link.' };
     }
 
     await viewCartLink.click();
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+    await settlePage(page);
 
     // 4. Invariant 1 (READ): Is at least 1 item visible in the cart?
     const cartItemsCount = await page.locator('[role="row"], tr.cart_item, .cart-item, [class*="cart_item" i], [class*="cart-item" i]').count();
@@ -53,10 +53,9 @@ export const cartTransitionCheck: InvariantCheck = {
       'a:has-text("Delete"), button:has-text("Remove"), [class*="delete" i], [aria-label*="remove" i], a:has-text("×")'
     ).first();
 
-    if (await removeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await removeBtn.isVisible({ timeout: timing.visibilityMs }).catch(() => false)) {
       await removeBtn.click();
-      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-      await page.waitForTimeout(1000);
+      await settlePage(page);
 
       // Verify cart count decreased
       const postDeleteCount = await page.locator('[role="row"], tr.cart_item, .cart-item, [class*="cart_item" i], [class*="cart-item" i]').count();
