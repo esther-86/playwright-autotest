@@ -13,6 +13,9 @@ export interface AppConfig {
   openaiApiKey: string;
   anthropicApiKey: string;
   ollamaBaseUrl: string;
+  invariantMode: 'SMART' | 'ALL';
+  maxJourneysToTest: number;
+  journeyTimeBudgetSeconds: number;
 }
 
 /**
@@ -35,4 +38,7 @@ export const config: AppConfig = {
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+  invariantMode: ((process.env.INVARIANT_MODE || 'SMART').toUpperCase() === 'ALL' ? 'ALL' : 'SMART'),
+  maxJourneysToTest: parseInt(process.env.MAX_JOURNEYS_TO_TEST || '0', 10),
+  journeyTimeBudgetSeconds: parseInt(process.env.JOURNEY_TIME_BUDGET_SECONDS || '60', 10),
 };

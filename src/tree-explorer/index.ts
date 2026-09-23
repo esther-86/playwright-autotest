@@ -227,8 +227,12 @@ export async function exploreStateTree(config: AppConfig = defaultConfig): Promi
     const specPath = path.join(artifactsDir, 'state-tree-journeys.spec.ts');
     fs.writeFileSync(specPath, specContent, 'utf-8');
 
+    const jsonPath = path.join(artifactsDir, 'state-tree-journeys.json');
+    fs.writeFileSync(jsonPath, JSON.stringify(allDiscoveredJourneys, null, 2), 'utf-8');
+
     console.log(`\n🎉 Exploration complete! Synthesized ${allDiscoveredJourneys.length} multi-step tests.`);
-    console.log(`📁 Test file written to: ${specPath}\n`);
+    console.log(`📁 Test file written to: ${specPath}`);
+    console.log(`📁 JSON artifact written to: ${jsonPath}\n`);
 
     return allDiscoveredJourneys;
   } finally {

@@ -16,18 +16,26 @@ export interface CandidateBugMetadata {
   failedRequests?: Array<{ url: string; status: number }>;
 }
 
-const QUEUE_DIR = path.resolve(process.cwd(), 'queue');
+let bugsDirectory = path.resolve(process.cwd(), 'artifacts', 'bugs');
 
 export class BugQueue {
+  static setOutputDir(dir: string) {
+    bugsDirectory = dir;
+  }
+
+  static getOutputDir(): string {
+    return bugsDirectory;
+  }
+
   static init() {
-    if (!fs.existsSync(QUEUE_DIR)) {
-      fs.mkdirSync(QUEUE_DIR, { recursive: true });
+    if (!fs.existsSync(bugsDirectory)) {
+      fs.mkdirSync(bugsDirectory, { recursive: true });
     }
   }
 
   static getNextBugId(): string {
     this.init();
-    const existing = fs.readdirSync(QUEUE_DIR).filter((f: string) => f.startsWith('BUG-'));
+    const existing = fs.readdirSync(bugsDirectory).filter((f: string) => f.startsWith('BUG-'));
     const nextNum = existing.length + 1;
     return `BUG-${String(nextNum).padStart(3, '0')}`;
   }
@@ -84,7 +92,7 @@ test('${meta.title}', async ({ page }) => {
   static saveCandidateBug(meta: Omit<CandidateBugMetadata, 'id' | 'createdAt'>): { id: string; folderPath: string; tracePath: string; specPath: string } {
     this.init();
     const id = this.getNextBugId();
-    const folderPath = path.join(QUEUE_DIR, id);
+    const folderPath = path.join(bugsDirectory, id);
     fs.mkdirSync(folderPath, { recursive: true });
 
     const fullMeta: CandidateBugMetadata = {
@@ -100,7 +108,7 @@ test('${meta.title}', async ({ page }) => {
     const reportMd = this.generateReportMd(fullMeta);
     fs.writeFileSync(path.join(folderPath, 'report.md'), reportMd, 'utf8');
 
-    // 3. Standalone test spec inside the bug folder: queue/BUG-XXX/repro.spec.ts
+    // 3. Standalone test spec inside the bug folder: artifacts/bugs/BUG-XXX/repro.spec.ts
     const specSnippet = fullMeta.specSnippet || `// Reproduction for ${id}\nawait page.goto('${fullMeta.targetUrl}');\n// Invariant violated: ${fullMeta.actual}`;
     const specCode = `import { test, expect } from '@playwright/test';
 
@@ -124,11 +132,11 @@ test.describe('${id}: ${meta.title.replace(/'/g, "\\'")}', () => {
 
   static listPendingBugs(): CandidateBugMetadata[] {
     this.init();
-    const folders = fs.readdirSync(QUEUE_DIR).filter((f: string) => f.startsWith('BUG-'));
+    const folders = fs.readdirSync(bugsDirectory).filter((f: string) => f.startsWith('BUG-'));
     const bugs: CandidateBugMetadata[] = [];
 
     for (const folder of folders) {
-      const metaPath = path.join(QUEUE_DIR, folder, 'metadata.json');
+      const metaPath = path.join(bugsDirectory, folder, 'metadata.json');
       if (fs.existsSync(metaPath)) {
         try {
           const content = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
