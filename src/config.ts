@@ -1,4 +1,14 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Always use this project's .env as the source of runtime configuration.
+// override prevents inherited shell/IDE values from silently winning, while
+// quiet avoids dotenv diagnostics consuming terminal/debug output.
+dotenv.config({
+  path: path.resolve(process.cwd(), '.env'),
+  override: true,
+  quiet: true,
+});
 
 export interface AppConfig {
   targetUrl: string;

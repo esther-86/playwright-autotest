@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { chromium, Browser, Page } from 'playwright';
@@ -104,6 +103,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
       const networkRecorder = createNetworkRecorder(page);
 
       const consoleErrors: string[] = [];
+      const uncaughtPageErrors: string[] = [];
       const failedRequests: Array<{ url: string; status: number }> = [];
 
       page.on('console', (msg) => {
@@ -113,6 +113,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
       });
       page.on('pageerror', (err) => {
         consoleErrors.push(err.message);
+        uncaughtPageErrors.push(err.message);
       });
       page.on('response', (resp) => {
         if (resp.status() >= 400 && !resp.url().includes('favicon') && !resp.url().includes('.png')) {
@@ -282,17 +283,19 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
           if (bugMeta) break;
         }
 
-        // Uncaught JavaScript console errors
-        if (!bugMeta && consoleErrors.length > 0) {
+        // Only actual uncaught page exceptions are independently actionable.
+        // console.error output remains evidence for the action-scoped LLM judge,
+        // but third-party scripts commonly use it for recoverable diagnostics.
+        if (!bugMeta && uncaughtPageErrors.length > 0) {
           bugMeta = {
             targetUrl: page.url(),
-            title: `Unhandled Console Error on "${journeyTitle.slice(0, 40)}"`,
+            title: `Uncaught Page Exception on "${journeyTitle.slice(0, 40)}"`,
             invariantId: 'interactiveActionIntegrity',
             severity: 'MEDIUM',
-            expected: 'No uncaught JavaScript errors in browser console during user flow',
-            actual: `Console errors detected: ${consoleErrors.join('; ')}`,
+            expected: 'No uncaught JavaScript exceptions during the user flow',
+            actual: `Uncaught page exceptions: ${uncaughtPageErrors.join('; ')}`,
             reproductionSteps: completedSteps,
-            consoleErrors,
+            consoleErrors: uncaughtPageErrors,
             failedRequests,
             specSnippet: generateReproSnippet(journey),
           };

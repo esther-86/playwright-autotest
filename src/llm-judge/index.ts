@@ -8,6 +8,8 @@ import {
   PageEvidence,
 } from './types';
 import { DiscoveredAction } from '../tree-explorer/types';
+import judgeConfig from '../../config/llm-judge.json';
+import { geminiEndpoint, geminiHeaders, geminiProviderConfig } from '../llm-provider-config';
 
 const expectationSystemPrompt = `You are a rigorous web QA expectation generator.
 Infer only externally observable outcomes that a reasonable user can expect from the described action and page state.
@@ -46,15 +48,68 @@ function stripCodeFence(text: string): string {
   return text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 }
 
-async function providerError(response: Response, provider: string): Promise<Error> {
+function parseJsonObject(text: string): any {
+  const stripped = stripCodeFence(text);
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  const candidate = start >= 0 && end > start ? stripped.slice(start, end + 1) : stripped;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // A common local-model failure is a trailing comma before a closing token.
+    return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1'));
+  }
+}
+
+function geminiKeyShape(apiKey: string): string {
+  const trimmed = apiKey.trim();
+  const family = trimmed.startsWith('AQ.')
+    ? 'AQ auth key'
+    : trimmed.startsWith('AIza')
+      ? 'AIza standard key'
+      : 'unrecognized key prefix';
+  return `${family}, ${trimmed.length} characters`;
+}
+
+async function providerError(
+  response: Response,
+  provider: string,
+  credentialDiagnostic?: string
+): Promise<Error> {
   const rawBody = await response.text().catch(() => '');
   let detail = rawBody;
+  let diagnosticFields = '';
+  let remediation = '';
   try {
     const parsed = JSON.parse(rawBody);
     detail = parsed?.error?.message || parsed?.message || rawBody;
+    const error = parsed?.error || parsed;
+    const info = Array.isArray(error?.details)
+      ? error.details.find((item: any) => item?.reason || item?.metadata)
+      : undefined;
+    const fields = [
+      error?.status ? `status=${error.status}` : '',
+      info?.reason ? `reason=${info.reason}` : '',
+      info?.metadata?.service ? `service=${info.metadata.service}` : '',
+      info?.metadata?.methodName ? `method=${info.metadata.methodName}` : '',
+    ].filter(Boolean);
+    diagnosticFields = fields.length ? ` [${fields.join(', ')}]` : '';
+    if (provider.startsWith('Gemini') && info?.reason === 'ACCESS_TOKEN_TYPE_UNSUPPORTED') {
+      remediation =
+        ' Re-copy the complete AQ. key from Google AI Studio and verify it is restricted to the Gemini API; do not paste it into logs.';
+    } else if (provider.startsWith('Gemini') && info?.reason === 'API_KEY_SERVICE_BLOCKED') {
+      remediation =
+        ' Verify the key is bound to the Gemini API and that no proxy adds an Authorization Bearer header.';
+    } else if (provider.startsWith('Gemini') && info?.reason === 'CREDENTIALS_MISSING') {
+      remediation =
+        ' The credential and gateway do not match; use a Gemini API key for generativelanguage.googleapis.com.';
+    }
   } catch {}
   const suffix = detail ? ` — ${String(detail).replace(/\s+/g, ' ').slice(0, 500)}` : '';
-  return new Error(`${provider} judge request failed: HTTP ${response.status}${suffix}`);
+  const credential = credentialDiagnostic ? ` [credential=${credentialDiagnostic}]` : '';
+  return new Error(
+    `${provider} judge request failed: HTTP ${response.status}${diagnosticFields}${credential}${suffix}${remediation}`
+  );
 }
 
 function clampAssessment(value: any): LLMBugAssessment {
@@ -94,9 +149,9 @@ ${JSON.stringify({
     expectations: input.expectations,
     before: evidenceForPrompt(input.before),
     after: evidenceForPrompt(input.after),
-    consoleErrors: input.consoleErrors.slice(-20),
-    failedRequests: input.failedRequests.slice(-20),
-    networkEvents: input.networkEvents.slice(-50),
+    consoleErrors: input.consoleErrors.slice(-judgeConfig.maxConsoleErrors),
+    failedRequests: input.failedRequests.slice(-judgeConfig.maxFailedRequests),
+    networkEvents: input.networkEvents.slice(-judgeConfig.maxNetworkEvents),
     executionError: input.executionError,
     probeResults: input.probeResults,
   })}`;
@@ -109,9 +164,9 @@ interface ModelTransport {
 }
 
 function createGeminiTransport(config: AppConfig): ModelTransport {
-  const model = config.llmJudgeModel || 'gemini-2.5-flash';
+  const model = config.llmJudgeModel || geminiProviderConfig.judgeDefaultModel;
   return {
-    name: `Gemini (${model})`,
+    name: `Gemini (${model}, ${geminiProviderConfig.apiVersion})`,
     available: Boolean(config.geminiApiKey),
     async complete(system, prompt, images = []) {
       const parts: any[] = [{ text: prompt }];
@@ -119,10 +174,10 @@ function createGeminiTransport(config: AppConfig): ModelTransport {
         parts.push({ inlineData: { mimeType: 'image/jpeg', data } });
       }
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${config.geminiApiKey}`,
+        geminiEndpoint(model),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(config.geminiApiKey),
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: system }] },
             contents: [{ role: 'user', parts }],
@@ -130,7 +185,13 @@ function createGeminiTransport(config: AppConfig): ModelTransport {
           }),
         }
       );
-      if (!response.ok) throw await providerError(response, 'Gemini');
+      if (!response.ok) {
+        throw await providerError(
+          response,
+          'Gemini native generateContent',
+          geminiKeyShape(config.geminiApiKey)
+        );
+      }
       const data: any = await response.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Gemini judge returned no text');
@@ -237,6 +298,26 @@ export function createLLMJudge(config: AppConfig): LLMJudge {
     }
   };
 
+  const parseStructuredResponse = async (raw: string, purpose: string): Promise<any> => {
+    try {
+      return parseJsonObject(raw);
+    } catch (initialError: any) {
+      const repairPrompt = `Repair the following malformed JSON for ${purpose}. Preserve its meaning, emit one valid JSON object, and emit no commentary:\n${raw.slice(0, judgeConfig.maxRepairInputChars)}`;
+      try {
+        const repaired = await complete(
+          'You repair malformed JSON. Return exactly one valid JSON object with no Markdown.',
+          repairPrompt
+        );
+        return parseJsonObject(repaired);
+      } catch (repairError: any) {
+        operational = false;
+        throw new Error(
+          `Structured ${purpose} output remained invalid after one repair attempt: ${repairError.message || initialError.message}`
+        );
+      }
+    }
+  };
+
   return {
     providerName: transport.name,
     available: enabled,
@@ -245,9 +326,9 @@ export function createLLMJudge(config: AppConfig): LLMJudge {
       if (!operational) return [];
       const prompt = JSON.stringify({ action, page: evidenceForPrompt(before) });
       const raw = await complete(expectationSystemPrompt, prompt);
-      const parsed = JSON.parse(stripCodeFence(raw));
+      const parsed = await parseStructuredResponse(raw, 'expectation');
       if (!Array.isArray(parsed?.expectations)) return [];
-      return parsed.expectations.slice(0, 8).map((item: any): ExpectedOutcome => ({
+      return parsed.expectations.slice(0, judgeConfig.maxExpectations).map((item: any): ExpectedOutcome => ({
         description: String(item?.description || '').slice(0, 1000),
         observableEvidence: String(item?.observableEvidence || '').slice(0, 1000),
       })).filter((item: ExpectedOutcome) => item.description);
@@ -258,7 +339,7 @@ export function createLLMJudge(config: AppConfig): LLMJudge {
       }
       const images = config.llmJudgeIncludeScreenshots ? screenshotsFromInput(input) : [];
       const raw = await complete(assessmentSystemPrompt, judgePrompt(input), images);
-      return clampAssessment(JSON.parse(stripCodeFence(raw)));
+      return clampAssessment(await parseStructuredResponse(raw, 'assessment'));
     },
   };
 }

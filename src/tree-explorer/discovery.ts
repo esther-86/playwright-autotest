@@ -2,6 +2,7 @@ import { Page } from 'playwright';
 import { DiscoveredAction } from './types';
 import { config } from '../config';
 import { timing } from '../timing';
+import { geminiEndpoint, geminiHeaders, geminiProviderConfig } from '../llm-provider-config';
 
 /**
  * Checks whether a URL, pathname, or title matches any excluded URL pattern.
@@ -100,10 +101,10 @@ Rules:
   }
 ]`;
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+  const endpoint = geminiEndpoint(geminiProviderConfig.discoveryModel);
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: geminiHeaders(apiKey),
     body: JSON.stringify({
       contents: [{ parts: [{ text: systemPrompt }] }],
       generationConfig: { responseMimeType: 'application/json' },

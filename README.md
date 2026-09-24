@@ -99,6 +99,14 @@ failures. Credentials and query-string values are removed before URLs are sent
 to the model. Unrelated telemetry failures are explicitly excluded from the
 bug criteria.
 
+Prompt-size limits for accessibility text, visible text, controls, network
+events, and repair input are maintained in `config/llm-judge.json`. The default
+budget is intentionally small enough for local models with a 4096-token context.
+
+Gemini REST configuration is maintained in `config/llm-providers.json`. Change
+`gemini.apiVersion` to `v1` or `v1beta` there; the judge, action discovery, and
+brain integrations all use the same configured version and model defaults.
+
 All explicit browser time bounds are configured in `config/timing.json` and
 consumed through `src/timing.ts`; runtime code should not contain numeric
 Playwright timeouts or direct fixed sleeps.

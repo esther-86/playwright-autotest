@@ -1,0 +1,11 @@
+{
+  "maxAriaChars": 900,
+  "maxVisibleTextChars": 1200,
+  "maxControls": 10,
+  "maxExpectations": 3,
+  "maxConsoleErrors": 5,
+  "maxFailedRequests": 5,
+  "maxNetworkEvents": 10,
+  "maxRepairInputChars": 6000,
+  "screenshotJpegQuality": 45
+}

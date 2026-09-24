@@ -1,5 +1,6 @@
 import { BrainDecision, InvariantTestSelection, LLMBrain, PageElement } from './types';
 import { config } from '../config';
+import { geminiEndpoint, geminiHeaders, geminiProviderConfig } from '../llm-provider-config';
 
 export function getScopePolicyPrompt(): string {
   const maxDepth = config.maxExplorationDepth;
@@ -202,10 +203,10 @@ Select the applicable universal metamorphic invariants for this page from:
 Output a JSON array: [{"invariantId": string, "targetSelector"?: string, "params"?: object, "reason": string}].`;
 
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const url = geminiEndpoint(geminiProviderConfig.brainModel);
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(apiKey),
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: 'application/json' },
@@ -234,10 +235,10 @@ Output JSON: {"action": "CLICK"|"STOP", "target": "selector", "reason": "why"}.
 If an action is out of scope per policy, do not select it. If no in-scope action is found, return {"action": "STOP", "reason": "No in-scope actions remaining"}.`;
 
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const url = geminiEndpoint(geminiProviderConfig.brainModel);
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(apiKey),
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: 'application/json' },

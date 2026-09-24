@@ -1,10 +1,7 @@
 import { Page } from 'playwright';
 import { PageEvidence } from './types';
 import { timing } from '../timing';
-
-const MAX_ARIA_CHARS = 14_000;
-const MAX_TEXT_CHARS = 14_000;
-const MAX_CONTROLS = 80;
+import judgeConfig from '../../config/llm-judge.json';
 
 export async function capturePageEvidence(
   page: Page,
@@ -30,14 +27,14 @@ export async function capturePageEvidence(
               name:
                 html.getAttribute('aria-label') ||
                 html.getAttribute('title') ||
-                (html.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 160),
+                (html.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 100),
               value: 'value' in input ? String(input.value || '') : '',
               checked: 'checked' in input ? Boolean(input.checked) : null,
               disabled: 'disabled' in input ? Boolean(input.disabled) : false,
             }
           : null;
       }).filter(Boolean),
-    MAX_CONTROLS)
+    judgeConfig.maxControls)
     .catch(() => []);
 
   const scroll = await page.evaluate(() => ({
@@ -50,7 +47,12 @@ export async function capturePageEvidence(
   let screenshotBase64: string | undefined;
   if (includeScreenshot) {
     screenshotBase64 = await page
-      .screenshot({ type: 'jpeg', quality: 60, fullPage: false, animations: 'disabled' })
+      .screenshot({
+        type: 'jpeg',
+        quality: judgeConfig.screenshotJpegQuality,
+        fullPage: false,
+        animations: 'disabled',
+      })
       .then((buffer) => buffer.toString('base64'))
       .catch(() => undefined);
   }
@@ -59,8 +61,8 @@ export async function capturePageEvidence(
     capturedAt: new Date().toISOString(),
     url: page.url(),
     title: await page.title().catch(() => ''),
-    ariaSnapshot: ariaSnapshot.slice(0, MAX_ARIA_CHARS),
-    visibleText: visibleText.slice(0, MAX_TEXT_CHARS),
+    ariaSnapshot: ariaSnapshot.slice(0, judgeConfig.maxAriaChars),
+    visibleText: visibleText.slice(0, judgeConfig.maxVisibleTextChars),
     controls: controls as PageEvidence['controls'],
     viewport,
     scroll,

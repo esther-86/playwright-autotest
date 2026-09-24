@@ -1,0 +1,9 @@
+{
+  "gemini": {
+    "baseUrl": "https://generativelanguage.googleapis.com",
+    "apiVersion": "v1beta",
+    "judgeDefaultModel": "gemini-3.8-flash",
+    "discoveryModel": "gemini-3.8-flash",
+    "brainModel": "gemini-3.8-flash"
+  }
+}
