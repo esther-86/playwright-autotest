@@ -14,12 +14,18 @@ export async function executeSafeProbes(
     try {
       if (request.type === 'WAIT_AND_RECHECK') {
         await settlePage(page);
-        results.push({ request, ok: true, value: 'Page rechecked after bounded network-idle wait' });
-        continue;
-      }
-      if (request.type === 'RELOAD') {
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: timing.reloadMs });
-        results.push({ request, ok: true, value: { url: page.url(), title: await page.title() } });
+        results.push({
+          request,
+          ok: true,
+          value: {
+            url: page.url(),
+            title: await page.title(),
+            visibleText: (await page.locator('body').innerText().catch(() => '')).slice(0, 1500),
+            activeLoaders: await page.locator(
+              '[aria-busy="true"]:visible, [class*="spinner" i]:visible, [class*="loading" i]:visible'
+            ).count().catch(() => 0),
+          },
+        });
         continue;
       }
 

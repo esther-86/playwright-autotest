@@ -1,6 +1,7 @@
 import { BrainDecision, InvariantTestSelection, LLMBrain, PageElement } from './types';
 import { config } from '../config';
 import { geminiEndpoint, geminiHeaders, geminiProviderConfig } from '../llm-provider-config';
+import { timing } from '../timing';
 
 export function getScopePolicyPrompt(): string {
   const maxDepth = config.maxExplorationDepth;
@@ -206,6 +207,7 @@ Output a JSON array: [{"invariantId": string, "targetSelector"?: string, "params
         const url = geminiEndpoint(geminiProviderConfig.brainModel);
         const res = await fetch(url, {
           method: 'POST',
+          signal: AbortSignal.timeout(timing.providerRequestMs),
           headers: geminiHeaders(apiKey),
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
@@ -238,6 +240,7 @@ If an action is out of scope per policy, do not select it. If no in-scope action
         const url = geminiEndpoint(geminiProviderConfig.brainModel);
         const res = await fetch(url, {
           method: 'POST',
+          signal: AbortSignal.timeout(timing.providerRequestMs),
           headers: geminiHeaders(apiKey),
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],

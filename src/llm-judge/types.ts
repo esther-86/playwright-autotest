@@ -8,8 +8,7 @@ export type ProbeType =
   | 'GET_ATTRIBUTE'
   | 'BOUNDING_BOX'
   | 'SCREENSHOT_REGION'
-  | 'WAIT_AND_RECHECK'
-  | 'RELOAD';
+  | 'WAIT_AND_RECHECK';
 
 export interface PageEvidence {
   capturedAt: string;

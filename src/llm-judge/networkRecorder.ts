@@ -26,17 +26,20 @@ export interface NetworkRecorder {
 }
 
 export function createNetworkRecorder(page: Page): NetworkRecorder {
-  const events: Array<{ sequence: number; event: NetworkObservation }> = [];
-  let nextSequence = 0;
+  const events: Array<{ requestSequence: number; event: NetworkObservation }> = [];
+  let nextRequestSequence = 0;
   const startedAt = new WeakMap<Request, number>();
+  const requestSequences = new WeakMap<Request, number>();
 
-  const append = (event: NetworkObservation) => {
-    events.push({ sequence: nextSequence++, event });
+  const append = (request: Request, event: NetworkObservation) => {
+    const requestSequence = requestSequences.get(request) ?? nextRequestSequence++;
+    events.push({ requestSequence, event });
     if (events.length > MAX_RECORDED_EVENTS) events.shift();
   };
 
   const onRequest = (request: Request) => {
     startedAt.set(request, Date.now());
+    requestSequences.set(request, nextRequestSequence++);
   };
 
   const onResponse = (response: Response) => {
@@ -45,7 +48,7 @@ export function createNetworkRecorder(page: Page): NetworkRecorder {
     if (!RELEVANT_RESOURCE_TYPES.has(resourceType) && response.status() < 400) return;
 
     const start = startedAt.get(request);
-    append({
+    append(request, {
       kind: 'RESPONSE',
       method: request.method(),
       url: sanitizeNetworkUrl(response.url()),
@@ -57,7 +60,7 @@ export function createNetworkRecorder(page: Page): NetworkRecorder {
 
   const onRequestFailed = (request: Request) => {
     const start = startedAt.get(request);
-    append({
+    append(request, {
       kind: 'REQUEST_FAILED',
       method: request.method(),
       url: sanitizeNetworkUrl(request.url()),
@@ -72,8 +75,10 @@ export function createNetworkRecorder(page: Page): NetworkRecorder {
   page.on('requestfailed', onRequestFailed);
 
   return {
-    mark: () => nextSequence,
-    since: (mark) => events.filter((entry) => entry.sequence >= mark).map((entry) => entry.event),
+    mark: () => nextRequestSequence,
+    since: (mark) => events
+      .filter((entry) => entry.requestSequence >= mark)
+      .map((entry) => entry.event),
     stop: () => {
       page.off('request', onRequest);
       page.off('response', onResponse);

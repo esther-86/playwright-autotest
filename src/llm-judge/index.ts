@@ -10,6 +10,7 @@ import {
 import { DiscoveredAction } from '../tree-explorer/types';
 import judgeConfig from '../../config/llm-judge.json';
 import { geminiEndpoint, geminiHeaders, geminiProviderConfig } from '../llm-provider-config';
+import { timing } from '../timing';
 
 const expectationSystemPrompt = `You are a rigorous web QA expectation generator.
 Infer only externally observable outcomes that a reasonable user can expect from the described action and page state.
@@ -36,7 +37,7 @@ Return JSON only with this shape:
   "observed":string,
   "evidence":string[],
   "additionalProbes":[{
-    "type":"READ_TEXT"|"COUNT"|"GET_ATTRIBUTE"|"BOUNDING_BOX"|"SCREENSHOT_REGION"|"WAIT_AND_RECHECK"|"RELOAD",
+    "type":"READ_TEXT"|"COUNT"|"GET_ATTRIBUTE"|"BOUNDING_BOX"|"SCREENSHOT_REGION"|"WAIT_AND_RECHECK",
     "locator"?:string,
     "parameter"?:string,
     "purpose":string
@@ -177,6 +178,7 @@ function createGeminiTransport(config: AppConfig): ModelTransport {
         geminiEndpoint(model),
         {
           method: 'POST',
+          signal: AbortSignal.timeout(timing.providerRequestMs),
           headers: geminiHeaders(config.geminiApiKey),
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: system }] },
@@ -212,6 +214,7 @@ function createOpenAITransport(config: AppConfig): ModelTransport {
       }
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
+        signal: AbortSignal.timeout(timing.providerRequestMs),
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.openaiApiKey}`,
@@ -243,6 +246,7 @@ function createOllamaTransport(config: AppConfig): ModelTransport {
     async complete(system, prompt, images = []) {
       const response = await fetch(`${config.ollamaBaseUrl.replace(/\/$/, '')}/api/chat`, {
         method: 'POST',
+        signal: AbortSignal.timeout(timing.providerRequestMs),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,

@@ -7,5 +7,6 @@
   "maxFailedRequests": 5,
   "maxNetworkEvents": 10,
   "maxRepairInputChars": 6000,
-  "screenshotJpegQuality": 45
+  "screenshotJpegQuality": 45,
+  "captureControlValues": false
 }

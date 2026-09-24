@@ -2,6 +2,15 @@ import { Page } from 'playwright';
 import { PageEvidence } from './types';
 import { timing } from '../timing';
 import judgeConfig from '../../config/llm-judge.json';
+import { sanitizeNetworkUrl } from './networkRecorder';
+
+function redactSensitiveText(value: string): string {
+  return value
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
+    .replace(/\b(?:\d[ -]*?){13,19}\b/g, '[redacted-payment-number]')
+    .replace(/\b(?:AIza[A-Za-z0-9_-]+|AQ\.[A-Za-z0-9._-]+|sk-[A-Za-z0-9_-]+)\b/g, '[redacted-api-key]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted-token]');
+}
 
 export async function capturePageEvidence(
   page: Page,
@@ -14,8 +23,8 @@ export async function capturePageEvidence(
 
   const controls = await page
     .locator('button, a[href], input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"]')
-    .evaluateAll((elements, limit) =>
-      elements.slice(0, limit).map((element) => {
+    .evaluateAll((elements, options) =>
+      elements.slice(0, options.limit).map((element) => {
         const html = element as HTMLElement;
         const input = element as HTMLInputElement;
         const style = window.getComputedStyle(html);
@@ -28,13 +37,18 @@ export async function capturePageEvidence(
                 html.getAttribute('aria-label') ||
                 html.getAttribute('title') ||
                 (html.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 100),
-              value: 'value' in input ? String(input.value || '') : '',
+              value: options.captureControlValues && 'value' in input
+                ? String(input.value || '').slice(0, 100)
+                : '',
               checked: 'checked' in input ? Boolean(input.checked) : null,
               disabled: 'disabled' in input ? Boolean(input.disabled) : false,
             }
           : null;
       }).filter(Boolean),
-    judgeConfig.maxControls)
+    {
+      limit: judgeConfig.maxControls,
+      captureControlValues: judgeConfig.captureControlValues,
+    })
     .catch(() => []);
 
   const scroll = await page.evaluate(() => ({
@@ -59,11 +73,15 @@ export async function capturePageEvidence(
 
   return {
     capturedAt: new Date().toISOString(),
-    url: page.url(),
+    url: sanitizeNetworkUrl(page.url()),
     title: await page.title().catch(() => ''),
-    ariaSnapshot: ariaSnapshot.slice(0, judgeConfig.maxAriaChars),
-    visibleText: visibleText.slice(0, judgeConfig.maxVisibleTextChars),
-    controls: controls as PageEvidence['controls'],
+    ariaSnapshot: redactSensitiveText(ariaSnapshot).slice(0, judgeConfig.maxAriaChars),
+    visibleText: redactSensitiveText(visibleText).slice(0, judgeConfig.maxVisibleTextChars),
+    controls: (controls as PageEvidence['controls']).map((control) => ({
+      ...control,
+      name: redactSensitiveText(control.name),
+      value: redactSensitiveText(control.value),
+    })),
     viewport,
     scroll,
     screenshotBase64,

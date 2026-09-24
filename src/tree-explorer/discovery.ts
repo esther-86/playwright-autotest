@@ -104,6 +104,7 @@ Rules:
   const endpoint = geminiEndpoint(geminiProviderConfig.discoveryModel);
   const res = await fetch(endpoint, {
     method: 'POST',
+    signal: AbortSignal.timeout(timing.providerRequestMs),
     headers: geminiHeaders(apiKey),
     body: JSON.stringify({
       contents: [{ parts: [{ text: systemPrompt }] }],

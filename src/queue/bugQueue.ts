@@ -5,6 +5,8 @@ export interface CandidateBugMetadata {
   id: string;
   createdAt: string;
   targetUrl: string;
+  reproductionStartUrl?: string;
+  lifecycle?: 'CANDIDATE' | 'CONFIRMED';
   title: string;
   invariantId: string;
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
@@ -12,6 +14,7 @@ export interface CandidateBugMetadata {
   actual: string;
   reproductionSteps: string[];
   specSnippet?: string;
+  automatedAssertion?: string;
   consoleErrors?: string[];
   failedRequests?: Array<{ url: string; status: number }>;
   networkEvents?: Array<{
@@ -44,21 +47,25 @@ export class BugQueue {
 
   static getNextBugId(): string {
     this.init();
-    const existing = fs.readdirSync(bugsDirectory).filter((f: string) => f.startsWith('BUG-'));
-    const nextNum = existing.length + 1;
+    const existingNumbers = fs.readdirSync(bugsDirectory)
+      .map((name) => name.match(/^BUG-(\d+)$/)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map(Number);
+    const nextNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
     return `BUG-${String(nextNum).padStart(3, '0')}`;
   }
 
   static generateReportMd(meta: CandidateBugMetadata): string {
     const stepsList = meta.reproductionSteps.map((step, idx) => `${idx + 1}. ${step}`).join('\n');
-    return `# Defect Report: ${meta.id}
+    return `# Candidate Bug Report: ${meta.id}
 
 ## Overview
-- **Defect ID:** \`${meta.id}\`
+- **Candidate ID:** \`${meta.id}\`
 - **Title:** ${meta.title}
 - **Invariant Violated:** \`${meta.invariantId}\`
 - **Severity:** \`${meta.severity}\`
 - **Target URL:** [${meta.targetUrl}](${meta.targetUrl})
+- **Lifecycle:** \`${meta.lifecycle || 'CANDIDATE'}\`
 - **Discovered At:** ${meta.createdAt}
 
 ---
@@ -72,12 +79,12 @@ ${meta.actual}
 
 ---
 
-## 1-Minimal Reproduction Sequence
+## Candidate Action Trace (Unminimized)
 ${stepsList}
 
 ---
 
-## Standalone Playwright Reproduction Spec
+## Playwright Candidate Spec
 \`\`\`typescript
 ${meta.specSnippet || `// Replay steps on ${meta.targetUrl}
 import { test, expect } from '@playwright/test';
@@ -108,6 +115,7 @@ test('${meta.title}', async ({ page }) => {
     const fullMeta: CandidateBugMetadata = {
       id,
       createdAt: new Date().toISOString(),
+      lifecycle: 'CANDIDATE',
       ...meta,
     };
 
@@ -120,12 +128,16 @@ test('${meta.title}', async ({ page }) => {
 
     // 3. Standalone test spec inside the bug folder: artifacts/bugs/BUG-XXX/repro.spec.ts
     const specSnippet = fullMeta.specSnippet || `// Reproduction for ${id}\nawait page.goto('${fullMeta.targetUrl}');\n// Invariant violated: ${fullMeta.actual}`;
+    const requiresManualOracle = fullMeta.invariantId.startsWith('LLM_') && !fullMeta.automatedAssertion;
+    const startUrl = fullMeta.reproductionStartUrl || fullMeta.targetUrl;
     const specCode = `import { test, expect } from '@playwright/test';
 
 test.describe('${id}: ${meta.title.replace(/'/g, "\\'")}', () => {
-  test('reproduce invariant failure', async ({ page }) => {
-    await page.goto('${meta.targetUrl}');
+  test('replay candidate action trace', async ({ page }) => {
+    ${requiresManualOracle ? `test.skip(true, 'LLM candidate requires a deterministic oracle from Phase 3 verification');` : ''}
+    await page.goto('${startUrl}');
     ${specSnippet}
+    ${fullMeta.automatedAssertion || ''}
   });
 });
 `;

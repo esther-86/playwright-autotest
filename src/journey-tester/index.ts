@@ -19,7 +19,7 @@ import { settlePage, timing } from '../timing';
  *
  * Replays state-tree journeys discovered in Stage 1 ('url:explore'),
  * probes for metamorphic invariant failures, runtime errors, and broken workflows,
- * and outputs confirmed defect folders with metadata.json, report.md, repro.spec.ts, and trace.zip.
+ * and outputs unconfirmed candidate folders for the Phase 3 verifier.
  */
 export async function runJourneyExplorer(appConfig: AppConfig = config) {
   const artifactsDir = path.resolve(process.cwd(), 'artifacts');
@@ -126,7 +126,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
 
       let executionError: string | null = null;
       const completedSteps: string[] = [];
-      let llmBugMeta: Omit<CandidateBugMetadata, 'id' | 'createdAt'> | null = null;
+      const llmBugMetas: Array<Omit<CandidateBugMetadata, 'id' | 'createdAt'>> = [];
 
       try {
         await page.goto(appConfig.targetUrl, { waitUntil: 'domcontentloaded', timeout: timing.navigationMs });
@@ -201,10 +201,11 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
             if (
               assessment?.verdict === 'SUSPICIOUS' &&
               assessment.confidence >= appConfig.llmJudgeMinConfidence &&
-              !llmBugMeta
+              !llmBugMetas.some((bug) => bug.title === `[LLM ${assessment.category || 'FUNCTIONAL'} Candidate] ${assessment.title}`)
             ) {
-              llmBugMeta = {
+              llmBugMetas.push({
                 targetUrl: afterEvidence.url,
+                reproductionStartUrl: appConfig.targetUrl,
                 title: `[LLM ${assessment.category || 'FUNCTIONAL'} Candidate] ${assessment.title}`,
                 invariantId: `LLM_${assessment.category || 'FUNCTIONAL'}_JUDGE`,
                 severity: assessment.category === 'VISUAL' || assessment.category === 'CONTENT' ? 'LOW' : 'MEDIUM',
@@ -215,7 +216,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
                 failedRequests: [...failedRequests],
                 networkEvents: networkRecorder.since(networkMark),
                 specSnippet: generateReproSnippet(journey.slice(0, sIdx + 1)),
-              };
+              });
             }
           }
         }
@@ -227,13 +228,14 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
       const crashOverlay = page.locator('[class*="crash" i], [class*="fatal" i], .error-page');
       const hasCrash = await crashOverlay.isVisible().catch(() => false);
 
-      let bugMeta: Omit<CandidateBugMetadata, 'id' | 'createdAt'> | null = null;
+      const bugMetas: Array<Omit<CandidateBugMetadata, 'id' | 'createdAt'>> = [];
 
       if (hasCrash || executionError) {
-        bugMeta = {
+        bugMetas.push({
           targetUrl: page.url(),
+          reproductionStartUrl: appConfig.targetUrl,
           title: `UI Crash / Execution Failure on "${journeyTitle.slice(0, 50)}"`,
-          invariantId: 'uiThreadLiveness',
+          invariantId: 'UI_THREAD_LIVENESS',
           severity: 'HIGH',
           expected: 'Page actions must complete smoothly without UI crash or execution timeout',
           actual: executionError ? `Execution failed: ${executionError}` : 'UI crash overlay detected',
@@ -241,10 +243,10 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
           consoleErrors: [...consoleErrors],
           failedRequests: [...failedRequests],
           specSnippet: generateReproSnippet(journey),
-        };
-      } else if (llmBugMeta) {
-        bugMeta = llmBugMeta;
+        });
       } else {
+        bugMetas.push(...llmBugMetas);
+
         // Invariant Evaluation
         const invariantsToRun = selectInvariantsForScreen(
           page,
@@ -263,8 +265,9 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
 
             for (const res of results) {
               if (res.status === 'FAIL') {
-                bugMeta = {
+                bugMetas.push({
                   targetUrl: page.url(),
+                  reproductionStartUrl: appConfig.targetUrl,
                   title: res.details?.title || `${check.name} Failure on "${journeyTitle.slice(0, 40)}"`,
                   invariantId: check.id,
                   severity: res.details?.severity || 'HIGH',
@@ -274,23 +277,24 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
                   consoleErrors: [...consoleErrors, ...(res.details?.consoleErrors || [])],
                   failedRequests: [...failedRequests, ...(res.details?.failedRequests || [])],
                   specSnippet: res.details?.specSnippet || generateReproSnippet(journey),
-                };
+                });
                 break;
               }
             }
           } catch {}
 
-          if (bugMeta) break;
+          if (bugMetas.some((bug) => !bug.invariantId.startsWith('LLM_'))) break;
         }
 
         // Only actual uncaught page exceptions are independently actionable.
         // console.error output remains evidence for the action-scoped LLM judge,
         // but third-party scripts commonly use it for recoverable diagnostics.
-        if (!bugMeta && uncaughtPageErrors.length > 0) {
-          bugMeta = {
+        if (uncaughtPageErrors.length > 0) {
+          bugMetas.push({
             targetUrl: page.url(),
+            reproductionStartUrl: appConfig.targetUrl,
             title: `Uncaught Page Exception on "${journeyTitle.slice(0, 40)}"`,
-            invariantId: 'interactiveActionIntegrity',
+            invariantId: 'INTERACTIVE_ACTION_INTEGRITY',
             severity: 'MEDIUM',
             expected: 'No uncaught JavaScript exceptions during the user flow',
             actual: `Uncaught page exceptions: ${uncaughtPageErrors.join('; ')}`,
@@ -298,30 +302,39 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
             consoleErrors: uncaughtPageErrors,
             failedRequests,
             specSnippet: generateReproSnippet(journey),
-          };
+          });
         }
       }
 
-      if (bugMeta) {
-        // Save Candidate Bug: generates BUG-XXX folder with metadata.json, report.md, repro.spec.ts
-        const savedBug = BugQueue.saveCandidateBug(bugMeta);
+      if (bugMetas.length > 0) {
+        const savedBugs = bugMetas.map((bugMeta) => ({
+          bugMeta,
+          saved: BugQueue.saveCandidateBug(bugMeta),
+        }));
 
-        // Capture action trace archive into the bug folder: trace.zip
-        await context.tracing.stop({ path: savedBug.tracePath }).catch(() => {});
+        // One journey trace is shared by every candidate found along that journey.
+        await context.tracing.stop({ path: savedBugs[0].saved.tracePath }).catch(() => {});
+        for (const { saved } of savedBugs.slice(1)) {
+          if (fs.existsSync(savedBugs[0].saved.tracePath)) {
+            fs.copyFileSync(savedBugs[0].saved.tracePath, saved.tracePath);
+          }
+        }
 
-        detectedDefects.push({
-          id: savedBug.id,
-          invariantId: bugMeta.invariantId,
-          title: bugMeta.title,
-          folderPath: savedBug.folderPath,
-        });
+        for (const { bugMeta, saved } of savedBugs) {
+          detectedDefects.push({
+            id: saved.id,
+            invariantId: bugMeta.invariantId,
+            title: bugMeta.title,
+            folderPath: saved.folderPath,
+          });
 
-        console.log(`  🚨 DEFECT DETECTED & PACKAGED: [${savedBug.id}] ${bugMeta.title}`);
-        console.log(`     📁 Folder:   ${savedBug.folderPath}`);
-        console.log(`     📄 Report:   report.md`);
-        console.log(`     🧪 Repro:    repro.spec.ts`);
-        console.log(`     📦 Trace:    trace.zip`);
-        console.log(`     📊 Metadata: metadata.json`);
+          console.log(`  🚨 CANDIDATE DETECTED & PACKAGED: [${saved.id}] ${bugMeta.title}`);
+          console.log(`     📁 Folder:   ${saved.folderPath}`);
+          console.log(`     📄 Report:   report.md`);
+          console.log(`     🧪 Candidate: repro.spec.ts`);
+          console.log(`     📦 Trace:    trace.zip`);
+          console.log(`     📊 Metadata: metadata.json`);
+        }
       } else {
         await context.tracing.stop().catch(() => {});
         console.log(`  ✔ Journey passed all invariants`);
@@ -334,9 +347,9 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
     // 3. Summarize Results
     console.log('\n' + '='.repeat(65));
     console.log(`🎉 Journey testing complete! Tested scenarios in ${Math.round((Date.now() - startTime) / 1000)}s.`);
-    console.log(`🚨 Total Defects Detected: ${detectedDefects.length}`);
+    console.log(`🚨 Total Candidates Detected: ${detectedDefects.length}`);
     if (detectedDefects.length > 0) {
-      console.log(`📁 Defects written to: ${bugsDir}\n`);
+      console.log(`📁 Candidates written to: ${bugsDir}\n`);
       detectedDefects.forEach((d) => {
         console.log(`  - [${d.id}] [${d.invariantId}] ${d.title} (${d.folderPath})`);
       });
@@ -351,7 +364,7 @@ export async function runJourneyExplorer(appConfig: AppConfig = config) {
 /**
  * Selects applicable invariants based on screen affordances (SMART mode) or returns all (ALL mode).
  */
-function selectInvariantsForScreen(
+export function selectInvariantsForScreen(
   page: Page,
   mode: 'SMART' | 'ALL',
   allInvariants: InvariantCheck[]
@@ -360,13 +373,14 @@ function selectInvariantsForScreen(
 
   // SMART Mode: Run invariants relevant to general web invariants and screen controls
   const priorityIds = [
-    'uiThreadLiveness',
-    'interactiveActionIntegrity',
-    'contentIntegrity',
-    'perPageLimit',
-    'sortingOrder',
-    'cartArithmetic',
-    'brokenLinkReachability',
+    'UI_THREAD_LIVENESS',
+    'INTERACTIVE_ACTION_INTEGRITY',
+    'CONTENT_INTEGRITY',
+    'CARDINALITY_UPPER_BOUND',
+    'SORTING_ORDER_MONOTONICITY',
+    'CART_MATH_ARITHMETIC',
+    'HYPERLINK_REACHABILITY',
+    'VISUAL_LAYOUT_GEOMETRY',
   ];
 
   return allInvariants.filter((inv) => priorityIds.includes(inv.id));
@@ -375,7 +389,7 @@ function selectInvariantsForScreen(
 /**
  * Generates test body reproduction snippet for repro.spec.ts.
  */
-function generateReproSnippet(steps: DiscoveredAction[]): string {
+export function generateReproSnippet(steps: DiscoveredAction[]): string {
   return steps
     .map((s, i) => {
       const escapedLoc = s.locator.replace(/'/g, "\\'");
@@ -384,6 +398,8 @@ function generateReproSnippet(steps: DiscoveredAction[]): string {
         code = `await locator_${i + 1}.selectOption('${s.value || '1'}');`;
       } else if (s.actionType === 'TYPE') {
         code = `await locator_${i + 1}.fill('${s.value || 'test'}');`;
+      } else if (s.actionType === 'CHECK') {
+        code = `await locator_${i + 1}.check();`;
       }
       return `    // Step ${i + 1}: ${s.description}
     const locator_${i + 1} = page.locator('${escapedLoc}').first();
@@ -397,23 +413,37 @@ function generateReproSnippet(steps: DiscoveredAction[]): string {
 /**
  * Basic parser to extract journeys from state-tree-journeys.spec.ts if JSON artifact is unavailable.
  */
-function parseJourneysFromSpec(specContent: string): DiscoveredAction[][] {
+export function parseJourneysFromSpec(specContent: string): DiscoveredAction[][] {
   const journeys: DiscoveredAction[][] = [];
   const testBlocks = specContent.split("test('Journey ");
 
   for (let i = 1; i < testBlocks.length; i++) {
     const block = testBlocks[i];
-    const locatorRegex = /page\.locator\('([^']+)'\)/g;
     const actions: DiscoveredAction[] = [];
-    let match;
+    const locatorRegex = /const\s+(\w+)\s*=\s*page\.locator\('((?:\\.|[^'])*)'\)\.first\(\);/g;
+    let match: RegExpExecArray | null;
 
     while ((match = locatorRegex.exec(block)) !== null) {
+      const variable = match[1];
+      const locator = match[2].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+      const remainingBlock = block.slice(locatorRegex.lastIndex);
+      const actionMatch = remainingBlock.match(
+        new RegExp(`await\\s+${variable}\\.(click|check|selectOption|fill)\\(([^;]*)\\);`)
+      );
+      if (!actionMatch) continue;
+
+      const method = actionMatch[1];
+      const actionType: DiscoveredAction['actionType'] =
+        method === 'selectOption' ? 'SELECT' : method === 'fill' ? 'TYPE' : method === 'check' ? 'CHECK' : 'CLICK';
+      const rawArgument = actionMatch[2].trim();
+      const valueMatch = rawArgument.match(/^'((?:\\.|[^'])*)'$/);
       actions.push({
         id: `parsed_step_${actions.length + 1}`,
         category: 'STATE_MUTATION',
-        locator: match[1],
-        actionType: 'CLICK',
-        description: `Action on ${match[1]}`,
+        locator,
+        actionType,
+        value: valueMatch ? valueMatch[1].replace(/\\'/g, "'") : undefined,
+        description: `Action on ${locator}`,
         expectedInvariant: 'Step executes successfully',
       });
     }

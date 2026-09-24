@@ -32,26 +32,24 @@ TARGET_URL=https://academybugs.com/find-bugs/
 Runs all 9 mathematical invariants on the configured page:
 ```bash
 # Run headless (fast)
-npm test
+npm run invariants
 
 # Run headed (watch the browser live)
-npm run test:headed
+npm run invariants:headed
 ```
 
-### Option B: Run Autonomous Explorer (Agent 1)
-Navigates through the site, deduplicates archetypes, and reports candidate bugs:
+### Option B: Discover State-Tree Journeys (Agent 1)
+Navigates through the site, deduplicates states, and writes journey artifacts:
 ```bash
-npm run explore
-
-# Watch the autonomous explorer live
-npm run explore:headed
+npm run url:explore
 ```
 
-### Option C: Run the Live Antigravity Streaming Agent
-Streams internal reasoning and tool calls in real time using the official SDK:
+### Option C: Run Repository Integration Tests
 ```bash
-npm run agent:stream
+npm run test:integration
 ```
+
+Run the local regression suite without external browser traffic using `npm test`.
 
 ### Option D: Judge Every Journey Action with an LLM
 
@@ -65,7 +63,7 @@ LLM_PROVIDER=gemini
 LLM_JUDGE_MODEL=gemini-2.5-flash
 GEMINI_API_KEY=your-key
 LLM_JUDGE_MIN_CONFIDENCE=0.8
-LLM_JUDGE_SCREENSHOTS=true
+LLM_JUDGE_SCREENSHOTS=false
 ```
 
 OpenAI and local Ollama are also supported:
@@ -90,14 +88,19 @@ npm run journeys:explore
 ```
 
 Set `LLM_JUDGE_ENABLED=false` to use deterministic invariant checks only. LLM
-findings are deliberately labeled as candidates and packaged with the existing
-Playwright trace and reproduction artifacts.
+findings are deliberately labeled as unconfirmed candidates. A candidate with
+no deterministic oracle is emitted as a skipped Playwright test for Phase 3 to
+verify, so it cannot appear as a passing reproduction.
 
 Each assessment also receives action-scoped network evidence for documents,
 XHR, fetch, WebSocket/EventSource traffic, HTTP error responses, and transport
 failures. Credentials and query-string values are removed before URLs are sent
 to the model. Unrelated telemetry failures are explicitly excluded from the
 bug criteria.
+
+Control values are excluded by default and common email, payment-number, token,
+and API-key patterns are redacted from text evidence. Screenshot sharing is
+opt-in because screenshots may still contain personal or confidential content.
 
 Prompt-size limits for accessibility text, visible text, controls, network
 events, and repair input are maintained in `config/llm-judge.json`. The default

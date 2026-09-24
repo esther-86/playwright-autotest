@@ -12,5 +12,6 @@
   "shortObservationMs": 500,
   "normalObservationMs": 1000,
   "seedObservationMs": 2000,
-  "asyncObservationMs": 3500
+  "asyncObservationMs": 3500,
+  "providerRequestMs": 60000
 }

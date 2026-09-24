@@ -61,5 +61,5 @@ export const config: AppConfig = {
     1,
     Math.max(0, parseFloat(process.env.LLM_JUDGE_MIN_CONFIDENCE || '0.8'))
   ),
-  llmJudgeIncludeScreenshots: process.env.LLM_JUDGE_SCREENSHOTS?.toLowerCase() !== 'false',
+  llmJudgeIncludeScreenshots: process.env.LLM_JUDGE_SCREENSHOTS?.toLowerCase() === 'true',
 };

@@ -4,9 +4,9 @@
   "description": "Metamorphic & Invariant Web Testing powered by Dynamic Seed Harvesting",
   "main": "src/runner.ts",
   "scripts": {
-    "url:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/tree-explorer/index.ts",
-    "journeys:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx src/journey-tester/index.ts",
-    "tests": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" tsx tests/*.test.ts"
+    "url:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx src/tree-explorer/index.ts",
+    "journeys:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx src/journey-tester/index.ts",
+    "tests": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/discovery.test.ts && PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/depth2.test.ts"
   },
   "keywords": [
     "playwright",
