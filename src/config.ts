@@ -30,6 +30,7 @@ export interface AppConfig {
   llmJudgeModel: string;
   llmJudgeMinConfidence: number;
   llmJudgeIncludeScreenshots: boolean;
+  llmDiscoveryEnabled: boolean;
 }
 
 /**
@@ -62,4 +63,5 @@ export const config: AppConfig = {
     Math.max(0, parseFloat(process.env.LLM_JUDGE_MIN_CONFIDENCE || '0.8'))
   ),
   llmJudgeIncludeScreenshots: process.env.LLM_JUDGE_SCREENSHOTS?.toLowerCase() === 'true',
+  llmDiscoveryEnabled: process.env.LLM_DISCOVERY_ENABLED?.toLowerCase() === 'true',
 };

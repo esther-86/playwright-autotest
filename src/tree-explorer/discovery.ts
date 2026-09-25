@@ -43,9 +43,9 @@ export async function discoverScreenActions(
     ariaSnapshot = '';
   }
 
-  // 2. Try LLM Discovery if API key is present
+  // 2. Try LLM Discovery if enabled and API key is present
   const apiKey = config.geminiApiKey;
-  if (apiKey && ariaSnapshot.length > 50) {
+  if (config.llmDiscoveryEnabled && apiKey && ariaSnapshot.length > 50) {
     try {
       const actions = await queryLLMForActions(apiKey, currentUrl, title, ariaSnapshot, maxBreadth);
       if (actions.length > 0) {
