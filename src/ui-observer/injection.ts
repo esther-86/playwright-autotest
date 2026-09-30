@@ -69,14 +69,25 @@ export function installRecorder(options: { controlOrigin: string; afterActionMs:
     }
     return { recorder, locators };
   }
-  const make = (type: string, element?: Element, extra = {}) => ({
-    type, browserTimestamp: new Date().toISOString(), url: location.href,
-    title: document.title, ...extra,
-    ...(element ? { element: { tag: element.tagName.toLowerCase(), outerHTML: element.outerHTML,
-      value: (element as HTMLInputElement).value, inputType: element.getAttribute('type'), checked: (element as HTMLInputElement).checked,
-      ...candidates(element) } } : {}),
-  });
+  const make = (type: string, element?: Element, extra = {}) => {
+    const isTextEntry = element ? isTextEntryElement(element) : false;
+    const baseElement = element ? {
+      tag: element.tagName.toLowerCase(),
+      value: (element as HTMLInputElement).value,
+      inputType: element.getAttribute('type'),
+      checked: (element as HTMLInputElement).checked,
+      ...(isTextEntry && ['input', 'change'].includes(type) ? {} : { outerHTML: element.outerHTML }),
+      ...(!isTextEntry || !['input', 'change'].includes(type) ? candidates(element) : {}),
+    } : undefined;
+    return { type, browserTimestamp: new Date().toISOString(), url: location.href, title: document.title, ...extra, ...(baseElement ? { element: baseElement } : {}) };
+  };
   const initial = () => emit({ ...make('navigation'), afterHTML: html() });
+  const isTextEntryElement = (element: Element): boolean => {
+    if (element instanceof HTMLInputElement) return !['checkbox', 'radio', 'file', 'submit', 'button', 'range', 'color'].includes((element.type || '').toLowerCase());
+    return element instanceof HTMLTextAreaElement;
+  };
+  const lastTextInput = new WeakMap<Element, number>();
+  const debounceMs = 80;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initial, { once: true });
   else initial();
   for (const type of ['click', 'input', 'change', 'submit', 'keydown', 'keyup']) {
@@ -86,11 +97,19 @@ export function installRecorder(options: { controlOrigin: string; afterActionMs:
       // Text typing is represented by input/change; shortcut/control keys remain explicit.
       if (event instanceof KeyboardEvent && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) return;
       const element = type === 'click' ? source.closest('button,a,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=tab]') || source : source;
+      const isTextEntry = isTextEntryElement(element);
+      if (isTextEntry && ['input', 'change'].includes(type)) {
+        const now = Date.now();
+        const previous = lastTextInput.get(element);
+        if (previous && now - previous < debounceMs) return;
+        lastTextInput.set(element, now);
+      }
+      const snapshotHTML = !(isTextEntry && ['input', 'change'].includes(type));
       const id = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2);
       const rect = element.getBoundingClientRect();
       const extra = event instanceof KeyboardEvent ? { key: event.key, code: event.code } : event instanceof MouseEvent ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, button: event.button } : {};
-      emit({ ...make(type, element, extra), actionId: id, phase: 'before', beforeHTML: html() });
-      setTimeout(() => emit({ ...make(type), actionId: id, phase: 'after', afterHTML: html() }), options.afterActionMs);
+      emit({ ...make(type, element, extra), actionId: id, phase: 'before', ...(snapshotHTML ? { beforeHTML: html() } : {}) });
+      setTimeout(() => emit({ ...make(type), actionId: id, phase: 'after', ...(snapshotHTML ? { afterHTML: html() } : {}) }), options.afterActionMs);
     }, true);
   }
   const navigate = () => emit({ ...make('navigation'), afterHTML: html() });

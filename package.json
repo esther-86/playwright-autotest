@@ -8,9 +8,8 @@
     "journeys:explore": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx src/journey-tester/index.ts",
     "tests": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/discovery.test.ts && PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/depth2.test.ts",
     "ui:observe": "node --import tsx src/ui-observer/index.ts",
-    "ui:sanitize": "node --import tsx src/ui-observer/sanitize.ts",
-    "test:ui-observe": "node --import tsx --test tests/ui-observer.test.ts"
-  },
+    "ui:sanitize": "node --import tsx src/ui-observer/sanitize.ts"
+    },
   "keywords": [
     "playwright",
     "metamorphic-testing",

@@ -113,9 +113,12 @@ export class UISession {
       const action = this.actions.get(raw.actionId);
       if (!action) return;
       action.afterTimestamp = raw.browserTimestamp;
-      action.afterHTML = `html/${action.id}-after.html`;
-      await writeFile(join(this.directory, action.afterHTML), raw.afterHTML, { mode: 0o600 });
-      await this.screenshot(page, action); return;
+      if (raw.afterHTML) {
+        action.afterHTML = `html/${action.id}-after.html`;
+        await writeFile(join(this.directory, action.afterHTML), raw.afterHTML, { mode: 0o600 });
+        await this.screenshot(page, action);
+      }
+      return;
     }
     const { beforeHTML, afterHTML, ...metadata } = raw;
     const event: any = { ...metadata, id: `action-${this.events.length + 1}`, pageId: this.pages.get(page), receivedAt: new Date().toISOString(), frameUrl: frame.url(), framePath: this.framePath(frame) };

@@ -22,7 +22,9 @@ async function main(): Promise<void> {
   const url = values.get('--url') || values.get('--origin');
   if (!url || !['http:', 'https:'].includes(new URL(url).protocol)) throw new Error('Provide an HTTP(S) --url');
   const directory = join(resolve(values.get('--out') || 'artifacts/ui-observe'), `${Date.now()}-${randomUUID()}`);
-  const profile = resolve(values.get('--profile') || '.ui-observe/profile');
+  const explicitProfile = values.get('--profile');
+  const defaultProfile = join('.ui-observe', `profile-${Date.now()}-${randomUUID()}`);
+  const profile = resolve(explicitProfile || defaultProfile);
   await mkdir(profile, { recursive: true, mode: 0o700 });
   const token = `/${randomUUID()}/`;
   let session: UISession;
@@ -67,8 +69,7 @@ async function main(): Promise<void> {
           started = true; session.start();
           application = await context!.newPage(); session.setMainPage(application);
           await application.goto(url, { waitUntil: 'domcontentloaded', timeout: settings.navigationMs }).catch(() => session.issue('initial_navigation_failed'));
-          await application.bringToFront();
-          console.log('Recording active. Interact and narrate; return to the control tab to Stop & save.');
+          console.log('Recording active. Switch to the application tab and narrate your intent; return to the control tab to Stop & save.');
         }
       } else if (route === 'stop') {
         res.end('saving'); void finish('control_stop', false); return;

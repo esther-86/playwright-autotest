@@ -21,6 +21,47 @@ test('sanitization strips secrets regardless of payload field name', () => {
     type: 'click', method: 'POST', value: '[REMOVED FOR REVIEW]', arbitrary: '[REMOVED FOR REVIEW]', selectors: '[REMOVED FOR REVIEW]', requestJSON: '[REMOVED FOR REVIEW]',
   });
 });
+test('typing captures value metadata without expensive full-page snapshots', async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<!doctype html><input id="name" /><p id="outcome"></p><script>document.querySelector('input').addEventListener('input', e => document.querySelector('#outcome').textContent = e.target.value);</script>`);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const directory = await mkdtemp(join(tmpdir(), 'ui-observe-typing-'));
+  const profile = join(directory, 'profile');
+  const output = join(directory, 'sessions');
+  const cli = spawn(process.execPath, ['--import', 'tsx', 'src/ui-observer/index.ts', '--url', origin, '--profile', profile, '--out', output, '--headless']);
+  const exit = new Promise<number | null>(resolve => cli.on('exit', resolve));
+  let logs = ''; cli.stdout.on('data', chunk => { logs += String(chunk); }); cli.stderr.on('data', chunk => { logs += String(chunk); });
+  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | undefined;
+  try {
+    await until(() => logs.includes('Click Start microphone'));
+    const port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const control = browser.contexts()[0].pages()[0];
+    await control.locator('#start').click();
+    await until(() => logs.includes('Recording active'));
+    const page = browser.contexts()[0].pages().find(page => page.url().startsWith(origin))!;
+    await page.locator('#name').fill('Anne');
+    await page.locator('#outcome').waitFor({ state: 'visible' });
+    await new Promise(resolve => setTimeout(resolve, settings.audioChunkMs + settings.afterActionMs));
+    await control.locator('#stop').click();
+    assert.equal(await exit, 0, logs);
+    const sessionDir = join(output, (await readdir(output))[0]);
+    const events = JSON.parse(await readFile(join(sessionDir, 'ui-events.json'), 'utf8'));
+    const inputEvents = events.filter((event: any) => event.type === 'input' && event.element?.tag === 'input');
+    assert.ok(inputEvents.length > 0, 'expected the input event to be recorded');
+    assert.ok(inputEvents.every((event: any) => event.element.value === 'Anne' || event.element.value === '' || event.element.value === 'A' || event.element.value.startsWith('A')));
+    assert.ok(inputEvents.length <= 2, 'input events should be debounced to avoid per-keystroke browser jitter');
+    assert.ok(inputEvents.every((event: any) => event.beforeHTML === undefined && event.afterHTML === undefined), 'input typing should not serialize full DOM snapshots for each keystroke');
+  } finally {
+    if (cli.exitCode === null) { cli.kill('SIGTERM'); await exit; }
+    await browser?.close().catch(() => {});
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 test('CLI records microphone, robust selectors, raw network and snapshots; persists profile; sanitizes separately', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/api/save') {
