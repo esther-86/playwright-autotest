@@ -1,5 +1,12 @@
 # Playwright Autotest
 
+## Record manual workflows
+
+Run `npm run ui:observe -- --url http://localhost:3000` to launch a persistent
+Chromium browser and record UI steps, full network evidence, HTML, screenshots
+and microphone narration locally. See [the recording guide](docs/ui-observe.md)
+for controls, selector policy and the separate `ui:sanitize` review step.
+
 > **Autonomous web QA testing using Metamorphic Invariants and Dynamic Seed Harvesting.**  
 > Tests the "laws of physics" of websites (search, filters, sorting, pagination, cart state transitions) without needing hardcoded test data or pre-existing database knowledge.
 

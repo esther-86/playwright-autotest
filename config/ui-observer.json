@@ -1,0 +1,6 @@
+{
+  "afterActionMs": 350,
+  "navigationMs": 30000,
+  "captureMs": 5000,
+  "audioChunkMs": 1000
+}
