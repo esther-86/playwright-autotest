@@ -125,7 +125,13 @@ async function main(): Promise<void> {
       await context?.close().catch(() => session.issue('browser_close_or_har_flush_failed'));
       await session.save(reason);
       console.log(`Session saved: ${directory}\nRaw local bundle; sanitize and review before sharing with AI.`);
-    } catch { process.exitCode = 1; console.error('Session save failed; inspect the artifact directory for partial evidence.'); }
+    } catch {
+      process.exitCode = 1;
+      const interruptedBeforeStop = ['SIGINT', 'SIGTERM', 'browser_closed', 'launch_failed', 'control_stop'].includes(reason) && !session.audio?.startedAt;
+      console.error(interruptedBeforeStop
+        ? 'Session interrupted before Stop & save; partial raw bundle was saved for review.'
+        : 'Session save failed; inspect the artifact directory for partial evidence.');
+    }
     finally { server.close(); server.closeAllConnections(); doneResolve(); }
   }
   const interrupt = () => { void finish('SIGINT'); };
