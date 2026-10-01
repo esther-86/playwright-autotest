@@ -136,3 +136,88 @@ test('CLI records microphone, robust selectors, raw network and snapshots; persi
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('all layers off restarts without HAR and opens the application without recorder injection or microphone', async () => {
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<button id="action" onclick="console.log(\'clicked\');fetch(\'/api\')">Act</button>'); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const directory = await mkdtemp(join(tmpdir(), 'ui-observe-off-'));
+  const profile = join(directory, 'profile'), output = join(directory, 'sessions');
+  const cli = spawn(process.execPath, ['--import', 'tsx', 'src/ui-observer/index.ts', '--url', origin, '--profile', profile, '--out', output, '--headless']);
+  const exit = new Promise<number | null>(resolve => cli.on('exit', resolve));
+  let logs = ''; cli.stdout.on('data', chunk => logs += String(chunk)); cli.stderr.on('data', chunk => logs += String(chunk));
+  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | undefined;
+  try {
+    await until(() => logs.includes('Click Start microphone'));
+    const connect = async () => {
+      const port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
+      return chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    };
+    browser = await connect();
+    let control = browser.contexts()[0].pages()[0];
+    await control.locator('#off').click();
+    assert.equal(await control.locator('#layer-html').isEnabled(), false);
+    await control.locator('#apply').click().catch(() => {});
+    await until(() => logs.split('Click Start microphone').length === 3);
+    browser = await connect();
+    control = browser.contexts()[0].pages().find(page => page.url().includes('127.0.0.1') && !page.url().startsWith(origin))!;
+    for (const key of ['interactions', 'html', 'screenshots', 'network', 'console', 'audio']) assert.equal(await control.locator('#layer-' + key).isChecked(), false);
+    await control.locator('#start').click();
+    await until(() => logs.includes('Recording active'));
+    const page = browser.contexts()[0].pages().find(page => page.url().startsWith(origin))!;
+    assert.equal(await page.evaluate(() => (window as any).__uiObserveInstalled), undefined);
+    await page.locator('#action').click();
+    await control.locator('#stop').click();
+    assert.equal(await exit, 0, logs);
+    const sessionDir = join(output, (await readdir(output))[0]);
+    const manifest = JSON.parse(await readFile(join(sessionDir, 'manifest.json'), 'utf8'));
+    assert.ok(Object.values(manifest.captureLayers).every(value => value === false));
+    assert.ok(!manifest.files.includes('network.har'));
+    assert.ok(!(await readdir(sessionDir)).includes('network.har'));
+    for (const file of ['ui-events.json', 'console.json', 'network/index.json']) assert.deepEqual(JSON.parse(await readFile(join(sessionDir, file), 'utf8')), []);
+    for (const folder of ['html', 'screenshots']) assert.deepEqual(await readdir(join(sessionDir, folder)), []);
+    const audio = JSON.parse(await readFile(join(sessionDir, 'audio/timeline.json'), 'utf8'));
+    assert.equal(audio.status, 'disabled');
+    assert.ok(!(await readdir(join(sessionDir, 'audio'))).includes('narration.webm'));
+  } finally {
+    if (cli.exitCode === null) { cli.kill('SIGTERM'); await exit; }
+    await browser?.close().catch(() => {});
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('snapshot switches independently stop HTML serialization and screenshots', async () => {
+  const { UISession } = await import('../src/ui-observer/session');
+  const { defaultLayers, parseLayers } = await import('../src/ui-observer/layers');
+  assert.throws(() => parseLayers({ ...defaultLayers, interactions: false }), /require interactions/);
+  const directory = await mkdtemp(join(tmpdir(), 'ui-observe-layers-'));
+  const browser = await chromium.launch({ headless: true });
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<button data-testid="action">Act</button>'); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    for (const [html, screenshots] of [[false, true], [true, false], [false, false]]) {
+      const context = await browser.newContext();
+      const session = new UISession(join(directory, `${html}-${screenshots}`), 'http://control.invalid', { ...defaultLayers, html, screenshots, network: false, console: false, audio: false });
+      await session.prepare(); await session.attach(context); session.start();
+      const page = await context.newPage(); session.setMainPage(page);
+      await page.goto(origin); await page.locator('button').click();
+      await until(() => session.events.some(event => event.type === 'click'));
+      await new Promise(resolve => setTimeout(resolve, settings.afterActionMs + 200));
+      await session.drain(); session.freeze(); await session.save('test');
+      const click = session.events.find(event => event.type === 'click');
+      assert.equal(Boolean(click.beforeHTML), html);
+      assert.equal(Boolean(click.afterHTML), html);
+      assert.equal(Boolean(click.screenshot), screenshots);
+      assert.equal(Boolean(click.element.outerHTML), html);
+      assert.equal((await readdir(join(session.directory, 'html'))).length > 0, html);
+      assert.equal((await readdir(join(session.directory, 'screenshots'))).length > 0, screenshots);
+      assert.deepEqual(session.network, []); assert.deepEqual(session.consoleEvents, []);
+      await context.close();
+    }
+  } finally {
+    await browser.close(); await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

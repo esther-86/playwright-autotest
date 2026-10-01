@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { BrowserContext, Frame, Page, Request } from 'playwright';
 import settings from '../../config/ui-observer.json';
 import { installRecorder } from './injection';
+import { CaptureLayers, defaultLayers } from './layers';
 
 export class UISession {
   readonly id = randomUUID();
@@ -21,7 +22,7 @@ export class UISession {
   private stopped = false;
   private mainPage?: Page;
   private context?: BrowserContext;
-  constructor(readonly directory: string, readonly controlOrigin: string) {}
+  constructor(readonly directory: string, readonly controlOrigin: string, readonly layers: CaptureLayers = { ...defaultLayers }) {}
   async prepare(): Promise<void> {
     for (const name of ['html', 'screenshots', 'network', 'audio']) await mkdir(join(this.directory, name), { recursive: true, mode: 0o700 });
   }
@@ -35,14 +36,17 @@ export class UISession {
   }
   async attach(context: BrowserContext): Promise<void> {
     this.context = context;
-    await context.exposeBinding('__uiObserve', ({ page, frame }, event) => {
-      if (this.active && !this.stopped && !event.url?.startsWith(this.controlOrigin)) this.task(this.capture(page, frame, event));
-    });
-    // tsx/esbuild adds __name calls to serialized functions; keep the helper
-    // inside the injected closure rather than relying on application globals.
-    await context.addInitScript({ content: `(() => { const __name = (fn, name) => fn; (${installRecorder.toString()})(${JSON.stringify({ controlOrigin: this.controlOrigin, afterActionMs: settings.afterActionMs })}); })()` });
+    if (this.layers.interactions) {
+      await context.exposeBinding('__uiObserve', ({ page, frame }, event) => {
+        if (this.active && !this.stopped && !event.url?.startsWith(this.controlOrigin)) this.task(this.capture(page, frame, event));
+      });
+      // tsx/esbuild adds __name calls to serialized functions; keep the helper
+      // inside the injected closure rather than relying on application globals.
+      await context.addInitScript({ content: `(() => { const __name = (fn, name) => fn; (${installRecorder.toString()})(${JSON.stringify({ controlOrigin: this.controlOrigin, afterActionMs: settings.afterActionMs, html: this.layers.html, screenshots: this.layers.screenshots })}); })()` });
+    }
     context.on('page', page => this.attachPage(page));
     for (const page of context.pages()) this.attachPage(page);
+    if (!this.layers.network) return;
     context.on('request', request => {
       if (!this.active || this.stopped || request.url().startsWith(this.controlOrigin)) return;
       const item: any = {
@@ -88,12 +92,15 @@ export class UISession {
   private attachPage(page: Page): void {
     if (this.pages.has(page)) return;
     this.pages.set(page, `page-${this.pages.size + 1}`);
-    page.on('console', message => {
-      if (this.active && !this.stopped && !page.url().startsWith(this.controlOrigin)) this.consoleEvents.push({ pageId: this.pages.get(page), timestamp: new Date().toISOString(), type: message.type(), text: message.text(), location: message.location() });
-    });
-    page.on('pageerror', error => { if (this.active && !this.stopped) this.issue('page_error', error.message); });
+    if (this.layers.console) {
+      page.on('console', message => {
+        if (this.layers.console && this.active && !this.stopped && !page.url().startsWith(this.controlOrigin)) this.consoleEvents.push({ pageId: this.pages.get(page), timestamp: new Date().toISOString(), type: message.type(), text: message.text(), location: message.location() });
+      });
+      page.on('pageerror', error => { if (this.layers.console && this.active && !this.stopped) this.issue('page_error', error.message); });
+    }
+    if (!this.layers.network) return;
     page.on('websocket', socket => {
-      if (!this.active || this.stopped || socket.url().startsWith(this.controlOrigin.replace('http', 'ws'))) return;
+      if (!this.layers.network || !this.active || this.stopped || socket.url().startsWith(this.controlOrigin.replace('http', 'ws'))) return;
       const item: any = { id: `request-${this.network.length + 1}`, kind: 'websocket', url: socket.url(), timestamp: new Date().toISOString(), frames: [] };
       this.network.push(item);
       const record = (direction: string, payload: string | Buffer) => {
@@ -113,11 +120,11 @@ export class UISession {
       const action = this.actions.get(raw.actionId);
       if (!action) return;
       action.afterTimestamp = raw.browserTimestamp;
-      if (raw.afterHTML) {
+      if (this.layers.html && raw.afterHTML) {
         action.afterHTML = `html/${action.id}-after.html`;
         await writeFile(join(this.directory, action.afterHTML), raw.afterHTML, { mode: 0o600 });
-        await this.screenshot(page, action);
       }
+      if (raw.snapshot) await this.screenshot(page, action);
       return;
     }
     const { beforeHTML, afterHTML, ...metadata } = raw;
@@ -138,15 +145,15 @@ export class UISession {
       }
     }
     if (raw.actionId) this.actions.set(raw.actionId, event);
-    if (beforeHTML) {
+    if (this.layers.html && beforeHTML) {
       event.beforeHTML = `html/${event.id}-before.html`;
       await writeFile(join(this.directory, event.beforeHTML), beforeHTML, { mode: 0o600 });
     }
-    if (afterHTML) {
+    if (this.layers.html && afterHTML) {
       event.afterHTML = `html/${event.id}-after.html`;
       await writeFile(join(this.directory, event.afterHTML), afterHTML, { mode: 0o600 });
-      await this.screenshot(page, event);
     }
+    if (raw.snapshot || afterHTML) await this.screenshot(page, event);
     // Verify semantic candidates using the browser's accessibility locator engine.
     for (const candidate of event.element?.locators || []) {
       if (candidate.strategy !== 'role' && candidate.strategy !== 'label') continue;
@@ -169,6 +176,7 @@ export class UISession {
     return path;
   }
   private async screenshot(page: Page, event: any): Promise<void> {
+    if (!this.layers.screenshots) return;
     try {
       event.screenshot = `screenshots/${event.id}.png`;
       await page.screenshot({ path: join(this.directory, event.screenshot), timeout: settings.captureMs });
@@ -208,8 +216,8 @@ export class UISession {
     await this.json('audio/timeline.json', this.audio);
     await this.json('manifest.json', {
       version: 1, sessionId: this.id, startedAt: this.startedAt, stoppedAt: new Date().toISOString(), stopReason: reason,
-      capturePolicy: 'full_raw_local', uploadReady: false,
-      files: ['recorder.json', 'recorder-event-map.json', 'ui-events.json', 'network/index.json', 'network.har', 'console.json', 'audio/timeline.json'],
+      capturePolicy: 'full_raw_local', captureLayers: this.layers, uploadReady: false,
+      files: ['recorder.json', 'recorder-event-map.json', 'ui-events.json', 'network/index.json', ...(this.layers.network ? ['network.har'] : []), 'console.json', 'audio/timeline.json'],
       issues: this.issues,
       counts: { uiEvents: this.events.length, network: this.network.length },
       limitations: [

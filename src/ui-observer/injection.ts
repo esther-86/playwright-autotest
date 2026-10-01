@@ -1,5 +1,5 @@
 /** No positional selectors. Each candidate is checked for uniqueness in its root. */
-export function installRecorder(options: { controlOrigin: string; afterActionMs: number }): void {
+export function installRecorder(options: { controlOrigin: string; afterActionMs: number; html?: boolean; screenshots?: boolean }): void {
   const win = window as any;
   if (!['http:', 'https:'].includes(location.protocol) || location.origin === options.controlOrigin || win.__uiObserveInstalled) return;
   win.__uiObserveInstalled = true;
@@ -76,12 +76,12 @@ export function installRecorder(options: { controlOrigin: string; afterActionMs:
       value: (element as HTMLInputElement).value,
       inputType: element.getAttribute('type'),
       checked: (element as HTMLInputElement).checked,
-      ...(isTextEntry && ['input', 'change'].includes(type) ? {} : { outerHTML: element.outerHTML }),
+      ...(options.html === false || (isTextEntry && ['input', 'change'].includes(type)) ? {} : { outerHTML: element.outerHTML }),
       ...(!isTextEntry || !['input', 'change'].includes(type) ? candidates(element) : {}),
     } : undefined;
     return { type, browserTimestamp: new Date().toISOString(), url: location.href, title: document.title, ...extra, ...(baseElement ? { element: baseElement } : {}) };
   };
-  const initial = () => emit({ ...make('navigation'), afterHTML: html() });
+  const initial = () => emit({ ...make('navigation'), ...(options.html !== false ? { afterHTML: html() } : {}), snapshot: options.screenshots !== false });
   const isTextEntryElement = (element: Element): boolean => {
     if (element instanceof HTMLInputElement) return !['checkbox', 'radio', 'file', 'submit', 'button', 'range', 'color'].includes((element.type || '').toLowerCase());
     return element instanceof HTMLTextAreaElement;
@@ -108,11 +108,12 @@ export function installRecorder(options: { controlOrigin: string; afterActionMs:
       const id = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2);
       const rect = element.getBoundingClientRect();
       const extra = event instanceof KeyboardEvent ? { key: event.key, code: event.code } : event instanceof MouseEvent ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, button: event.button } : {};
-      emit({ ...make(type, element, extra), actionId: id, phase: 'before', ...(snapshotHTML ? { beforeHTML: html() } : {}) });
-      setTimeout(() => emit({ ...make(type), actionId: id, phase: 'after', ...(snapshotHTML ? { afterHTML: html() } : {}) }), options.afterActionMs);
+      emit({ ...make(type, element, extra), actionId: id, phase: 'before', ...(snapshotHTML && options.html !== false ? { beforeHTML: html() } : {}) });
+      if (options.html === false && options.screenshots === false) return;
+      setTimeout(() => emit({ ...make(type), actionId: id, phase: 'after', ...(snapshotHTML && options.html !== false ? { afterHTML: html() } : {}), snapshot: snapshotHTML && options.screenshots !== false }), options.afterActionMs);
     }, true);
   }
-  const navigate = () => emit({ ...make('navigation'), afterHTML: html() });
+  const navigate = () => emit({ ...make('navigation'), ...(options.html !== false ? { afterHTML: html() } : {}), snapshot: options.screenshots !== false });
   window.addEventListener('popstate', navigate);
   window.addEventListener('hashchange', navigate);
   // Do not patch app history; poll only the URL for pushState/replaceState.

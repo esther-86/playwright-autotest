@@ -1,16 +1,17 @@
 import { chromium, BrowserContext, Page } from 'playwright';
 import { createServer } from 'node:http';
-import { mkdir, appendFile, writeFile } from 'node:fs/promises';
+import { mkdir, appendFile, writeFile, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { UISession } from './session';
 import { controlHTML } from './control';
+import { defaultLayers, parseLayers } from './layers';
 import settings from '../../config/ui-observer.json';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('ui:observe --url http://localhost:3000 [--profile .ui-observe/profile] [--out artifacts/ui-observe]\n--origin is an alias for --url. A persistent Chromium window opens recording controls. Click Start microphone, allow permission, then interact in the application tab. Stop & save exports the raw local bundle.\n--headless is smoke-test mode with a synthetic microphone, not human narration.'); return;
+    console.log('ui:observe --url http://localhost:3000 [--profile .ui-observe/profile] [--out artifacts/ui-observe]\n--origin is an alias for --url. A persistent Chromium window opens recording controls. Select capture layers, Apply settings (network changes restart Chromium), then Start and interact in the application tab. Stop & save exports the raw local bundle.\n--headless is smoke-test mode with a synthetic microphone, not human narration.'); return;
   }
   const values = new Map<string, string>();
   let headless = false;
@@ -28,6 +29,8 @@ async function main(): Promise<void> {
   await mkdir(profile, { recursive: true, mode: 0o700 });
   const token = `/${randomUUID()}/`;
   let session: UISession;
+  let layers = { ...defaultLayers };
+  let restarting = false;
   let context: BrowserContext | undefined;
   let control: Page | undefined;
   let application: Page | undefined;
@@ -41,10 +44,11 @@ async function main(): Promise<void> {
     void (async () => {
       if (!req.url?.startsWith(token)) { res.writeHead(404).end(); return; }
       if (req.method === 'GET' && req.url === token) {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(controlHTML(settings.audioChunkMs)); return;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(controlHTML(settings.audioChunkMs, layers)); return;
       }
       if (req.method !== 'POST' || !session) { res.writeHead(405).end(); return; }
       const route = req.url.slice(token.length);
+      if (route.startsWith('audio') && !layers.audio) { res.writeHead(409).end(); return; }
       if (route === 'audio') {
         if (finishing && !finishAudioRequested) { res.writeHead(409).end(); return; }
         const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -56,7 +60,23 @@ async function main(): Promise<void> {
         await audioUploads; res.end('ok'); return;
       }
       let body = ''; for await (const chunk of req) body += chunk.toString();
-      if (route === 'audio-start') {
+      if (route === 'settings') {
+        if (started || restarting || finishing) { res.writeHead(409).end(); return; }
+        const chosen = parseLayers(JSON.parse(body));
+        const restart = chosen.network !== layers.network;
+        layers = chosen;
+        Object.assign(session.layers, layers);
+        Object.assign(session.audio, { status: layers.audio ? 'not_started' : 'disabled', file: layers.audio ? 'audio/narration.webm' : undefined });
+        if (restart) {
+          restarting = true;
+          res.end('restarting');
+          await context!.close();
+          await unlink(join(directory, 'network.har')).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          try { await launch(); } catch { await finish('restart_failed', false); }
+          finally { restarting = false; }
+          return;
+        }
+      } else if (route === 'audio-start') {
         const data = JSON.parse(body);
         await audioUploads;
         await writeFile(join(directory, 'audio/narration.webm'), '', { mode: 0o600 });
@@ -66,10 +86,12 @@ async function main(): Promise<void> {
         Object.assign(session.audio, { stoppedAt: data.timestamp, status: session.audio.startedAt ? (data.complete ? 'complete' : 'incomplete') : 'not_started' });
       } else if (route === 'start') {
         if (!started) {
-          started = true; session.start();
+          started = true; Object.assign(session.layers, layers);
+          if (!layers.audio) Object.assign(session.audio, { status: 'disabled', file: undefined });
+          await session.attach(context!); session.start();
           application = await context!.newPage(); session.setMainPage(application);
           await application.goto(url, { waitUntil: 'domcontentloaded', timeout: settings.navigationMs }).catch(() => session.issue('initial_navigation_failed'));
-          console.log('Recording active. Switch to the application tab and narrate your intent; return to the control tab to Stop & save.');
+          console.log('Recording active. Switch to the application tab; return to the control tab to Stop & save.');
         }
       } else if (route === 'stop') {
         res.end('saving'); void finish('control_stop', false); return;
@@ -103,22 +125,24 @@ async function main(): Promise<void> {
   process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
   try {
     console.log(`Launching persistent Chromium. Profile: ${profile}\nArtifacts: ${directory}`);
-    context = await chromium.launchPersistentContext(profile, {
-      headless, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
-      recordHar: { path: join(directory, 'network.har'), content: 'embed', mode: 'full', urlFilter: new RegExp(`^(?!${origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`) },
-      args: ['--remote-debugging-port=0', ...(headless ? ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] : [])],
-    });
-    if (finishing) { await context.close(); return; }
-    context.on('close', () => { if (!finishing) void finish('browser_closed', false); });
-    await session.attach(context);
-    control = context.pages()[0] || await context.newPage();
-    await control.goto(origin + token);
-    console.log('Click Start microphone & open application in the control tab.');
+    await launch();
     await done;
   } catch {
     process.exitCode = 1; session.issue('browser_launch_or_setup_failed');
     console.error('Could not launch recording browser. Check that Chromium is installed and the profile is not already in use.');
     await finish('launch_failed', false);
   } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); }
+  async function launch(): Promise<void> {
+    context = await chromium.launchPersistentContext(profile, {
+      headless, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+      ...(layers.network ? { recordHar: { path: join(directory, 'network.har'), content: 'embed', mode: 'full', urlFilter: new RegExp(`^(?!${origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`) } } : {}),
+      args: ['--remote-debugging-port=0', ...(headless ? ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] : [])],
+    });
+    if (finishing) { await context.close(); return; }
+    context.on('close', () => { if (!finishing && !restarting) void finish('browser_closed', false); });
+    control = context.pages()[0] || await context.newPage();
+    await control.goto(origin + token);
+    console.log('Click Start microphone / selected layers & open application in the control tab.');
+  }
 }
 void main().catch(() => { console.error('Could not start ui:observe; check --help, URL and writable paths.'); process.exitCode = 1; });

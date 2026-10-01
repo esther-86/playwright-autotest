@@ -4,18 +4,37 @@
 npm run ui:observe -- --url http://localhost:3000
 ```
 
-The command launches visible bundled Chromium with a reusable profile at
-`.ui-observe/profile`. It remembers application cookies and local storage between
-sessions. Start the application separately. The command never starts your app.
+The command launches visible bundled Chromium with a fresh profile under
+`.ui-observe/`. Pass `--profile .ui-observe/pilot-profile` to reuse application cookies
+and local storage between sessions. Start the application separately. The command never starts your app.
 Install the browser first with `npx playwright install chromium` if needed.
 
-In the recording control tab, click **Start microphone & open application** and
-allow microphone permission (macOS may request permission too). A separate
+In the control tab, choose **Interactions & navigation**, **HTML snapshots**,
+**Screenshots**, **Network requests, bodies & HAR**, **Console messages & page
+errors**, and **Microphone narration**. All are enabled by default. Click **Apply
+settings** after changing switches, then **Start selected layers & open application**.
+Microphone permission is requested only when narration is enabled (macOS may
+request permission too). A separate
 application tab opens after capture starts. Narrate what you intend, perform
 the workflow, then return to the control tab and click **Stop & save session**.
 Keep the control tab open so audio can be finalized. Ctrl+C also requests a final
 audio chunk when possible. If you close/crash the browser first, the audio and
 pending snapshots may be incomplete; that is recorded rather than inferred.
+
+HTML and screenshots require interactions, which provide their capture points.
+Turning interactions off clears and disables both switches; re-enable them explicitly
+when needed. HTML and screenshots can otherwise be switched independently.
+Network changes restart Chromium before starting because HAR is a launch setting.
+The reopened control tab retains your choices. Settings are locked once started;
+stop and launch a new session for each comparison.
+
+For a recording-off baseline, click **All recording off**, **Apply settings**,
+wait for the browser to reopen, then **Start selected layers & open application**.
+The app still opens, with no recorder injection, network/HAR, console, screenshots,
+HTML or microphone capture. Stop still saves an empty bundle and selected settings.
+`manifest.json` records `captureLayers`; disabled audio has status `disabled`, and
+disabled network produces no HAR. Use these choices to compare flicker manually;
+they do not establish its cause or fix it.
 
 Each session saves to `artifacts/ui-observe/<timestamp>-<uuid>/`. The persistent
 profile is separate from artifacts and ignored by Git. The raw bundle contains
@@ -118,7 +137,7 @@ or speech. Both manifests have `uploadReady: false`; there is no automatic send.
 
 ## Verification
 
-`npm run test:ui-observe` exercises a local application with a synthetic audio
+`node --import tsx --test tests/ui-observer.test.ts` exercises a local application with a synthetic audio
 device: control-page recording, full network JSON, locator alternatives,
 HTML/screenshot capture, audio finalization, persistent local storage, HAR and
 separate sanitization. Real microphone permissions require a manual pilot.
