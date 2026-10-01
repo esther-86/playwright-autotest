@@ -8,6 +8,8 @@ export function controlHTML(chunkMs: number, layers: CaptureLayers = defaultLaye
   <button id="off" type="button">All recording off</button><button id="apply" type="button">Apply settings</button></fieldset>
   <p>HTML and screenshots use interaction capture points. Disabling interactions also disables both. Network changes restart this browser before recording; other settings apply without restart.</p>
   <button id="start">Start selected layers & open application</button><button id="stop" disabled>Stop & save session</button>
+  <p><label><input id="screenshots-enabled" type="checkbox" ${layers.screenshots ? 'checked' : ''}> Automatic screenshots after 750 ms idle</label>
+  <button id="capture-now" disabled>Capture now</button></p>
   <p id="status">Ready. Apply changed settings before starting. Microphone permission is requested only when narration is enabled.</p>
   <small>Keep this control tab open. Use Stop & save for a complete audio file. Raw artifacts are not sent to AI.</small>
   <script>
@@ -16,7 +18,18 @@ export function controlHTML(chunkMs: number, layers: CaptureLayers = defaultLaye
   const post = async (path, body, headers) => {const res=await fetch(location.pathname+path,{method:'POST',body,headers});if(!res.ok)throw new Error('Capture request failed: '+path);return res;};
   const selected = () => Object.fromEntries([...document.querySelectorAll('#layers input')].map(input=>[input.id.slice(6),input.checked]));
   let applied = ${JSON.stringify(layers)};
-  const dependency = () => {const enabled=document.querySelector('#layer-interactions').checked;for(const key of ['html','screenshots']){const input=document.querySelector('#layer-'+key);input.disabled=!enabled;if(!enabled)input.checked=false;}};
+  let recordingStarted=false;
+  const screenshotSwitch=document.querySelector('#screenshots-enabled');
+  const captureButton=document.querySelector('#capture-now');
+  screenshotSwitch.onchange=async()=>{
+    try {
+      if(!recordingStarted){document.querySelector('#layer-screenshots').checked=screenshotSwitch.checked;document.querySelector('#layers').dispatchEvent(new Event('change'));return;}
+      await post('screenshots',JSON.stringify({enabled:screenshotSwitch.checked}),{'Content-Type':'application/json'});
+      captureButton.disabled=!screenshotSwitch.checked;
+    } catch(error){screenshotSwitch.checked=!screenshotSwitch.checked;status.textContent='Could not change screenshot setting: '+error.message;}
+  };
+  captureButton.onclick=async()=>{captureButton.disabled=true;try{await post('capture-now');status.textContent='Manual screenshot queued for the application.';}catch(error){status.textContent='Capture unavailable: '+error.message;}finally{captureButton.disabled=!screenshotSwitch.checked||stopped;}};
+  const dependency = () => {const enabled=document.querySelector('#layer-interactions').checked;for(const key of ['html','screenshots']){const input=document.querySelector('#layer-'+key);input.disabled=!enabled;if(!enabled)input.checked=false;}screenshotSwitch.disabled=!enabled;if(!recordingStarted)screenshotSwitch.checked=document.querySelector('#layer-screenshots').checked;};
   dependency();
   document.querySelector('#layers').onchange=()=>{dependency();document.querySelector('#start').disabled=true;status.textContent='Settings changed. Click Apply settings before starting.';};
   document.querySelector('#off').onclick=()=>{document.querySelectorAll('#layers input').forEach(input=>input.checked=false);dependency();document.querySelector('#start').disabled=true;status.textContent='All layers off. Click Apply settings, then Start to open the application.';};
@@ -35,6 +48,7 @@ export function controlHTML(chunkMs: number, layers: CaptureLayers = defaultLaye
       recorder.start(${chunkMs});
       }
       await post('start');
+      recordingStarted=true;screenshotSwitch.checked=applied.screenshots;screenshotSwitch.disabled=!applied.interactions;captureButton.disabled=!applied.screenshots;
       document.querySelector('#stop').disabled=false;
       status.textContent='Application open. Active layers: '+Object.keys(applied).filter(key=>applied[key]).join(', ')+' (none means recording off).';
     } catch(error) {
@@ -49,6 +63,7 @@ export function controlHTML(chunkMs: number, layers: CaptureLayers = defaultLaye
   window.finishRecording = async () => {
     if(stopped)return;stopped=true;
     document.querySelector('#stop').disabled=true;
+    screenshotSwitch.disabled=true;captureButton.disabled=true;
     if(recorder && recorder.state!=='inactive')await new Promise(resolve=>{recorder.onstop=resolve;recorder.stop();});
     stream?.getTracks().forEach(track=>track.stop());
     await uploads;

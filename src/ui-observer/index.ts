@@ -60,7 +60,14 @@ async function main(): Promise<void> {
         await audioUploads; res.end('ok'); return;
       }
       let body = ''; for await (const chunk of req) body += chunk.toString();
-      if (route === 'settings') {
+      if (route === 'screenshots') {
+        if (!started || finishing || !layers.interactions) { res.writeHead(409).end(); return; }
+        const { enabled } = JSON.parse(body);
+        if (typeof enabled !== 'boolean') { res.writeHead(400).end(); return; }
+        layers.screenshots = enabled; session.setScreenshotsEnabled(enabled);
+      } else if (route === 'capture-now') {
+        if (finishing || !session.captureNow()) { res.writeHead(409).end(); return; }
+      } else if (route === 'settings') {
         if (started || restarting || finishing) { res.writeHead(409).end(); return; }
         const chosen = parseLayers(JSON.parse(body));
         const restart = chosen.network !== layers.network;
@@ -106,6 +113,7 @@ async function main(): Promise<void> {
   async function finish(reason: string, stopAudio = true): Promise<void> {
     if (finishing) return;
     finishing = true;
+    session.freeze(); // Cancel screenshot timers immediately, before audio flush.
     try {
       if (stopAudio && control && !control.isClosed()) {
         finishAudioRequested = true;

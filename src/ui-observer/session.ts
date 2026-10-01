@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BrowserContext, Frame, Page, Request } from 'playwright';
 import settings from '../../config/ui-observer.json';
 import { installRecorder } from './injection';
 import { CaptureLayers, defaultLayers } from './layers';
+import { ScreenshotScheduler } from './screenshot-scheduler';
 
 export class UISession {
   readonly id = randomUUID();
@@ -13,6 +14,8 @@ export class UISession {
   readonly network: any[] = [];
   readonly consoleEvents: any[] = [];
   readonly issues: any[] = [];
+  readonly screenshots: any[] = [];
+  private screenshotSettings: { timestamp: string; enabled: boolean }[] = [];
   readonly audio: any = { file: 'audio/narration.webm', status: 'not_started', chunks: [] };
   private pages = new Map<Page, string>();
   private requests = new Map<Request, any>();
@@ -22,7 +25,29 @@ export class UISession {
   private stopped = false;
   private mainPage?: Page;
   private context?: BrowserContext;
-  constructor(readonly directory: string, readonly controlOrigin: string, readonly layers: CaptureLayers = { ...defaultLayers }) {}
+  private pageRevisions = new Map<Page, number>();
+  private lastEvents = new Map<Page, any>();
+  private lastActivePage?: Page;
+  private screenshotSequence = 0;
+  private screenshotScheduler: ScreenshotScheduler<{ page: Page; revision: number; event?: any }>;
+  constructor(readonly directory: string, readonly controlOrigin: string, readonly layers: CaptureLayers = { ...defaultLayers }) {
+    this.screenshotScheduler = new ScreenshotScheduler(settings.screenshotIdleMs, (value, mode, cancelled) => this.screenshot(value, mode, cancelled));
+    this.screenshotScheduler.setEnabled(layers.screenshots);
+  }
+  setScreenshotsEnabled(enabled: boolean): void {
+    this.layers.screenshots = enabled;
+    this.screenshotSettings.push({ timestamp: new Date().toISOString(), enabled });
+    this.screenshotScheduler.setEnabled(enabled && this.active && !this.stopped);
+  }
+  captureNow(): boolean {
+    const page = this.lastActivePage || this.mainPage;
+    if (!this.active || this.stopped || !this.layers.screenshots || !page || page.isClosed()) return false;
+    return this.screenshotScheduler.manual({ page, revision: this.pageRevisions.get(page) || 0, event: this.lastEvents.get(page) });
+  }
+  private activity(page: Page, event = this.lastEvents.get(page)): void {
+    this.lastActivePage = page;
+    if (this.layers.screenshots) this.screenshotScheduler.activity({ page, revision: this.pageRevisions.get(page) || 0, event });
+  }
   async prepare(): Promise<void> {
     for (const name of ['html', 'screenshots', 'network', 'audio']) await mkdir(join(this.directory, name), { recursive: true, mode: 0o700 });
   }
@@ -92,6 +117,10 @@ export class UISession {
   private attachPage(page: Page): void {
     if (this.pages.has(page)) return;
     this.pages.set(page, `page-${this.pages.size + 1}`);
+    this.pageRevisions.set(page, 0);
+    page.on('framenavigated', frame => {
+      if (frame === page.mainFrame()) this.pageRevisions.set(page, (this.pageRevisions.get(page) || 0) + 1);
+    });
     if (this.layers.console) {
       page.on('console', message => {
         if (this.layers.console && this.active && !this.stopped && !page.url().startsWith(this.controlOrigin)) this.consoleEvents.push({ pageId: this.pages.get(page), timestamp: new Date().toISOString(), type: message.type(), text: message.text(), location: message.location() });
@@ -112,10 +141,14 @@ export class UISession {
       socket.on('close', () => { item.closedAt = new Date().toISOString(); });
     });
   }
-  start(): void { this.active = true; }
+  start(): void {
+    this.active = true; this.screenshotScheduler.setEnabled(this.layers.screenshots);
+    this.screenshotSettings.push({ timestamp: new Date().toISOString(), enabled: this.layers.screenshots });
+  }
   setMainPage(page: Page): void { this.mainPage = page; }
-  freeze(): void { this.active = false; this.stopped = true; }
+  freeze(): void { this.active = false; this.stopped = true; this.screenshotScheduler.stop(); }
   private async capture(page: Page, frame: Frame, raw: any): Promise<void> {
+    if (raw.type === 'activity') { this.activity(page); return; }
     if (raw.phase === 'after') {
       const action = this.actions.get(raw.actionId);
       if (!action) return;
@@ -124,12 +157,13 @@ export class UISession {
         action.afterHTML = `html/${action.id}-after.html`;
         await writeFile(join(this.directory, action.afterHTML), raw.afterHTML, { mode: 0o600 });
       }
-      if (raw.snapshot) await this.screenshot(page, action);
       return;
     }
     const { beforeHTML, afterHTML, ...metadata } = raw;
     const event: any = { ...metadata, id: `action-${this.events.length + 1}`, pageId: this.pages.get(page), receivedAt: new Date().toISOString(), frameUrl: frame.url(), framePath: this.framePath(frame) };
     this.events.push(event);
+    this.lastEvents.set(page, event);
+    this.activity(page, event);
     if (event.framePath.length) {
       event.frameLocatorEvidence = [];
       let current = frame;
@@ -153,7 +187,6 @@ export class UISession {
       event.afterHTML = `html/${event.id}-after.html`;
       await writeFile(join(this.directory, event.afterHTML), afterHTML, { mode: 0o600 });
     }
-    if (raw.snapshot || afterHTML) await this.screenshot(page, event);
     // Verify semantic candidates using the browser's accessibility locator engine.
     for (const candidate of event.element?.locators || []) {
       if (candidate.strategy !== 'role' && candidate.strategy !== 'label') continue;
@@ -168,24 +201,33 @@ export class UISession {
         }
       } catch { candidate.verification = 'unavailable_after_action'; }
     }
-    if (event.element && !event.element.recorder.length) event.selectorStatus = 'needs_review_no_reliable_recorder_selector';
+    if (event.element && !event.element.recorder?.length) event.selectorStatus = 'needs_review_no_reliable_recorder_selector';
   }
   private framePath(frame: Frame): number[] {
     const path: number[] = [];
     while (frame.parentFrame()) { const parent = frame.parentFrame()!; path.unshift(parent.childFrames().indexOf(frame)); frame = parent; }
     return path;
   }
-  private async screenshot(page: Page, event: any): Promise<void> {
-    if (!this.layers.screenshots) return;
+  private async screenshot(value: { page: Page; revision: number; event?: any }, mode: 'idle' | 'manual', cancelled: () => boolean): Promise<void> {
+    const { page, revision, event } = value;
+    const valid = () => !cancelled() && !page.isClosed() && revision === this.pageRevisions.get(page);
+    if (!valid()) return;
+    const file = `screenshots/capture-${++this.screenshotSequence}.png`;
+    const record: any = { id: `capture-${this.screenshotSequence}`, mode, pageId: this.pages.get(page), eventId: event?.id, url: page.url(), startedAt: new Date().toISOString(), idleMs: mode === 'idle' ? settings.screenshotIdleMs : undefined };
     try {
-      event.screenshot = `screenshots/${event.id}.png`;
-      await page.screenshot({ path: join(this.directory, event.screenshot), timeout: settings.captureMs });
-      event.screenshotTimestamp = new Date().toISOString();
-    } catch { delete event.screenshot; event.screenshotLimitation = 'page_closed_or_capture_failed'; }
+      await page.screenshot({ path: join(this.directory, file), timeout: settings.captureMs });
+      record.finishedAt = new Date().toISOString();
+      if (!valid()) { await unlink(join(this.directory, file)).catch(() => {}); return; }
+      record.file = file; this.screenshots.push(record);
+      if (event) { event.screenshot = file; event.screenshotTimestamp = record.finishedAt; (event.screenshotIds ||= []).push(record.id); }
+    } catch {
+      await unlink(join(this.directory, file)).catch(() => {});
+      if (!cancelled()) { record.status = 'failed'; record.limitation = 'navigation_page_closed_or_capture_failed'; this.screenshots.push(record); }
+    }
   }
-  async drain(): Promise<void> { while (this.tasks.size) await Promise.allSettled([...this.tasks]); }
+  async drain(): Promise<void> { while (this.tasks.size) await Promise.allSettled([...this.tasks]); await this.screenshotScheduler.drain(); }
   async save(reason: string): Promise<void> {
-    this.stopped = true;
+    this.freeze();
     await this.drain();
     const steps: any[] = [];
     const eventMap: any[] = [];
@@ -211,13 +253,15 @@ export class UISession {
     await this.json('recorder.json', { title: `UI Observe ${this.id}`, steps });
     await this.json('recorder-event-map.json', eventMap);
     await this.json('ui-events.json', this.events);
+    await this.json('screenshots/index.json', this.screenshots);
     await this.json('network/index.json', this.network.map(item => ({ id: item.id, file: `network/${item.id}.json`, timestamp: item.timestamp, url: item.url })));
     await this.json('console.json', this.consoleEvents);
     await this.json('audio/timeline.json', this.audio);
     await this.json('manifest.json', {
       version: 1, sessionId: this.id, startedAt: this.startedAt, stoppedAt: new Date().toISOString(), stopReason: reason,
       capturePolicy: 'full_raw_local', captureLayers: this.layers, uploadReady: false,
-      files: ['recorder.json', 'recorder-event-map.json', 'ui-events.json', 'network/index.json', ...(this.layers.network ? ['network.har'] : []), 'console.json', 'audio/timeline.json'],
+      screenshotPolicy: { automatic: 'user_idle', idleMs: settings.screenshotIdleMs, serialized: true, settingsHistory: this.screenshotSettings },
+      files: ['recorder.json', 'recorder-event-map.json', 'ui-events.json', 'screenshots/index.json', 'network/index.json', ...(this.layers.network ? ['network.har'] : []), 'console.json', 'audio/timeline.json'],
       issues: this.issues,
       counts: { uiEvents: this.events.length, network: this.network.length },
       limitations: [

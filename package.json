@@ -9,7 +9,7 @@
     "tests": "PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/discovery.test.ts && PATH=\"$HOME/.nvm/versions/node/v20.19.6/bin:$PATH\" node --import tsx tests/depth2.test.ts",
     "ui:observe": "node --import tsx src/ui-observer/index.ts",
     "ui:sanitize": "node --import tsx src/ui-observer/sanitize.ts"
-    },
+  },
   "keywords": [
     "playwright",
     "metamorphic-testing",

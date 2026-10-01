@@ -25,8 +25,24 @@ HTML and screenshots require interactions, which provide their capture points.
 Turning interactions off clears and disables both switches; re-enable them explicitly
 when needed. HTML and screenshots can otherwise be switched independently.
 Network changes restart Chromium before starting because HAR is a launch setting.
-The reopened control tab retains your choices. Settings are locked once started;
-stop and launch a new session for each comparison.
+The reopened control tab retains your choices. Layer settings are locked once
+started except the live screenshot switch described below.
+
+Automatic screenshots are taken once after **750 milliseconds of user inactivity**,
+not on every interaction or keystroke. Input bursts coalesce into one observation;
+keyboard, pointer and scroll activity reset the timer even when HTML is disabled.
+There are no periodic screenshots. Captures are serialized across the session.
+
+Use **Automatic screenshots after 750 ms idle** to switch screenshot capture off
+or back on during recording without changing interaction or network capture.
+Switching off cancels pending/queued work. A browser screenshot already in flight
+cannot be interrupted by Playwright; its result is discarded and file removed.
+**Capture now** requests a manual screenshot of the most recently active app tab,
+without waiting for idle. It requires screenshots enabled and is queued behind
+any capture in flight. A manual capture supersedes a pending idle observation.
+Stopping cancels pending captures; navigation invalidates observations from the
+previous page state. This reduces capture frequency but does not prove visible
+flicker is eliminated; compare the live screenshot-off mode on your application.
 
 For a recording-off baseline, click **All recording off**, **Apply settings**,
 wait for the browser to reopen, then **Start selected layers & open application**.
@@ -62,7 +78,8 @@ microphone. Recording is not audio transcription.
 | `ui-events.json` | Actions, values, selector candidates, timestamps and snapshot links |
 | `html/action-*-before.html` | DOM captured in the event's capture phase |
 | `html/action-*-after.html` | DOM captured after the configured observation interval |
-| `screenshots/action-*.png` | Page screenshot with actual capture timestamp |
+| `screenshots/capture-*.png` | Idle/manual page observations with unique filenames |
+| `screenshots/index.json` | Capture mode, event/page ID, URL, start/finish timestamps and failures |
 | `network.har` | Full observable browser-context HTTP HAR, embedded content |
 | `network/index.json` | Request index with timestamps and file references |
 | `network/request-*.json` | Request/response metadata, parsed JSON bodies, redirect references or WebSocket frames |

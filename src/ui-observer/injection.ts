@@ -4,6 +4,11 @@ export function installRecorder(options: { controlOrigin: string; afterActionMs:
   if (!['http:', 'https:'].includes(location.protocol) || location.origin === options.controlOrigin || win.__uiObserveInstalled) return;
   win.__uiObserveInstalled = true;
   const emit = (event: any) => { void win.__uiObserve(event).catch(() => {}); };
+  // Independent of HTML snapshots and text-event coalescing. Lightweight
+  // activity signals ensure continuing typing/mouse activity resets idle time.
+  for (const type of ['pointerdown', 'pointermove', 'wheel', 'scroll', 'keydown', 'keyup', 'input', 'change', 'submit']) {
+    document.addEventListener(type, () => emit({ type: 'activity', url: location.href, browserTimestamp: new Date().toISOString() }), { capture: true, passive: true });
+  }
   const html = () => '<!doctype html>\n' + (document.documentElement?.outerHTML || '');
   const quoted = (text: string) => JSON.stringify(text);
   function candidates(element: Element): { recorder: (string | string[])[]; locators: any[] } {
